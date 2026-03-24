@@ -12,3 +12,4 @@ interests.yaml
 feeds.yaml
 connections.yaml
 daily.log
+.tts_cache/

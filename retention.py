@@ -37,8 +37,13 @@ def ensure_dirs():
 
 def load_review_state():
     if REVIEW_STATE_FILE.exists():
-        with open(REVIEW_STATE_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(REVIEW_STATE_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "cards" in data:
+                    return data
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: corrupted review_state.json: {e}")
     return {"cards": {}}
 
 
@@ -68,9 +73,12 @@ def load_all_cards():
     if not CARDS_DIR.exists():
         return all_cards
     for f in CARDS_DIR.glob("*.json"):
-        with open(f, 'r') as fh:
-            data = json.load(fh)
+        try:
+            with open(f, 'r') as fh:
+                data = json.load(fh)
             all_cards[f.stem] = data
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: skipping corrupted card file {f.name}: {e}")
     return all_cards
 
 
@@ -144,10 +152,6 @@ class SM2:
         reps = card_state["repetitions"]
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # Update ease factor (always, even on fail)
-        new_ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
-        new_ef = max(1.3, new_ef)
-
         if quality >= 3:  # Pass
             reps += 1
             if reps == 1:
@@ -155,10 +159,15 @@ class SM2:
             elif reps == 2:
                 new_interval = 6
             else:
-                new_interval = round(interval * new_ef)
+                new_interval = round(interval * ef)  # Use OLD ef per SM-2 spec
+            new_interval = min(new_interval, 365)  # Cap at 1 year
         else:  # Fail - restart
             reps = 0
             new_interval = 1
+
+        # Update ease factor AFTER interval calculation (SM-2 spec)
+        new_ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+        new_ef = max(1.3, new_ef)
 
         next_review = (datetime.now() + timedelta(days=new_interval)).strftime("%Y-%m-%d")
 
@@ -214,6 +223,12 @@ class SM2:
 
 CARD_GENERATION_PROMPT = """You are generating spaced repetition flashcards for a research paper. Generate 5-8 cards that test understanding, not just memorization.
 
+IMPORTANT STYLE RULES:
+- Explain concepts using plain language, analogies, and concrete examples — as if explaining to a smart engineer who is NOT a specialist in this exact subfield
+- Avoid raw math notation in answers. Instead, describe the intuition behind mathematical ideas. For example, instead of "minimize ||Ax - b||²", say "find the closest approximation to the target by minimizing the gap between prediction and reality"
+- Use everyday analogies when possible. For example, "polyhedral transformations rearrange loop computations like reorganizing a warehouse — you change the order items are picked to minimize walking distance, without changing what gets shipped"
+- Keep answers concrete: what does it DO, why does it MATTER, when would you USE it
+
 Paper:
 Title: {title}
 Authors: {authors}
@@ -234,7 +249,7 @@ Output ONLY a JSON array of cards. Each card has:
 - "id": short kebab-case identifier (e.g., "paper-slug-01")
 - "type": one of "concept", "comparison", "application", "limitation", "connection"
 - "question": a question that requires understanding to answer (not just recall)
-- "answer": a concise but complete answer (2-4 sentences)
+- "answer": a concise but complete answer (2-4 sentences, plain language, use analogies)
 - "difficulty": 1-5 (1=basic, 5=expert)
 
 Output the JSON array only, no other text. Example format:
@@ -370,18 +385,28 @@ class CardGenerator:
         paper_id = paper.get('id', 'unknown')
         slug = paper_id[:30]
 
-        # Ensure card IDs are unique and prefixed
+        # Validate and clean card structure from LLM
+        valid_cards = []
         for i, card in enumerate(cards):
+            if not isinstance(card, dict):
+                continue
+            # Require question and answer
+            if not card.get('question') or not card.get('answer'):
+                continue
             if not card.get('id', '').startswith(slug[:10]):
                 card['id'] = f"{slug}-{i+1:02d}"
-            # Validate required fields
             card.setdefault('type', 'concept')
             card.setdefault('difficulty', 2)
+            valid_cards.append(card)
+
+        if not valid_cards:
+            print("LLM returned no valid cards.")
+            return None
 
         cards_data = {
             "paper_id": paper_id,
             "generated_at": datetime.now().isoformat(),
-            "cards": cards
+            "cards": valid_cards
         }
 
         return cards_data
@@ -553,17 +578,120 @@ def fetch_arxiv_search(query, categories=None, max_results=5):
         return []
 
 
+def _strip_html(text):
+    """Remove HTML tags from text."""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def fetch_rss_feed(feed_url, max_results=10):
+    """Fetch items from an RSS/Atom feed."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        req = urllib.request.Request(feed_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            xml_text = response.read().decode('utf-8')
+
+        root = ET.fromstring(xml_text)
+        items = []
+
+        # Try RSS 2.0 format
+        for item in root.findall('.//item')[:max_results]:
+            title = item.find('title')
+            link = item.find('link')
+            desc = item.find('description')
+            desc_text = _strip_html(desc.text)[:500] if desc is not None and desc.text else ''
+            items.append({
+                'title': title.text.strip() if title is not None and title.text else 'Unknown',
+                'url': link.text.strip() if link is not None and link.text else '',
+                'abstract': desc_text,
+                'authors': [],
+                'year': datetime.now().year,
+                'source_type': 'rss',
+            })
+
+        # Try Atom format if no RSS items found
+        if not items:
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+            for entry in root.findall('atom:entry', ns)[:max_results]:
+                title = entry.find('atom:title', ns)
+                link = entry.find('atom:link', ns)
+                summary = entry.find('atom:summary', ns) or entry.find('atom:content', ns)
+                link_href = link.get('href', '') if link is not None else ''
+
+                authors = []
+                for author in entry.findall('atom:author', ns):
+                    name = author.find('atom:name', ns)
+                    if name is not None and name.text:
+                        authors.append(name.text.strip())
+
+                items.append({
+                    'title': title.text.strip() if title is not None and title.text else 'Unknown',
+                    'url': link_href,
+                    'abstract': summary.text.strip()[:500] if summary is not None and summary.text else '',
+                    'authors': authors,
+                    'year': datetime.now().year,
+                    'source_type': 'rss',
+                })
+
+        return items
+    except Exception as e:
+        print(f"RSS feed error ({feed_url}): {e}")
+        return []
+
+
+def scrape_web_page(url):
+    """Extract title and text content from any web page for card generation."""
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            html_content = response.read().decode('utf-8', errors='replace')
+
+        # Extract title
+        title_match = re.search(r'<title[^>]*>([^<]+)</title>', html_content, re.IGNORECASE)
+        title = title_match.group(1).strip() if title_match else 'Unknown'
+
+        # Extract og:description or meta description
+        desc_match = re.search(
+            r'<meta[^>]*(?:name="description"|property="og:description")[^>]*content="([^"]*)"',
+            html_content, re.IGNORECASE
+        )
+        description = desc_match.group(1).strip() if desc_match else ''
+
+        # Extract main text (strip tags, collapse whitespace)
+        # Remove script/style blocks
+        text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        # Remove tags
+        text = re.sub(r'<[^>]+>', ' ', text)
+        # Collapse whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        # Limit to first ~2000 chars for summary
+        text = text[:2000]
+
+        return {
+            'title': title,
+            'description': description,
+            'text': text,
+        }
+    except Exception as e:
+        print(f"Scrape error ({url}): {e}")
+        return None
+
+
 def run_daily_check():
-    """Run daily feed check: fetch new papers, score relevance, add discoveries."""
+    """Run daily feed check: fetch new papers from arXiv + RSS, score relevance, add discoveries."""
     feeds = load_feeds()
     interests = load_interests()
     existing_papers = load_all_papers()
 
-    # Track existing arXiv IDs to avoid duplicates
+    # Track existing URLs to avoid duplicates
     existing_urls = {p.get('url', '') for p in existing_papers.values()}
 
     new_discoveries = []
 
+    # 1. arXiv searches
     for search in feeds.get('arxiv_searches', []):
         query = search.get('query', '')
         categories = search.get('categories', [])
@@ -578,21 +706,41 @@ def run_daily_check():
         for paper in results:
             if paper.get('url') in existing_urls:
                 continue
-
-            # Score relevance
             score = RelevanceScorer.score(paper, interests)
             paper['relevance_score'] = score
-
-            if score >= 0.3:  # Threshold for auto-add
+            if score >= 0.3:
+                paper['source_type'] = 'arxiv'
                 new_discoveries.append(paper)
                 existing_urls.add(paper.get('url', ''))
+
+    # 2. RSS feeds
+    for feed in feeds.get('rss_feeds', []):
+        feed_url = feed.get('url', '')
+        feed_name = feed.get('name', feed_url)
+        max_results = feed.get('max_results', 10)
+
+        if not feed_url:
+            continue
+
+        print(f"Fetching RSS: {feed_name}")
+        results = fetch_rss_feed(feed_url, max_results)
+
+        for item in results:
+            if item.get('url') in existing_urls:
+                continue
+            score = RelevanceScorer.score(item, interests)
+            item['relevance_score'] = score
+            if score >= 0.3:
+                item['source'] = feed_name
+                new_discoveries.append(item)
+                existing_urls.add(item.get('url', ''))
 
     # Save new discoveries
     for paper in new_discoveries:
         from papers_cli import get_paper_id, save_yaml, PAPERS_DIR, ensure_dirs as ensure_paper_dirs
         ensure_paper_dirs()
 
-        paper_id = get_paper_id(paper['title'], paper.get('year', 2025))
+        paper_id = get_paper_id(paper['title'], paper.get('year', datetime.now().year))
         paper_path = PAPERS_DIR / f"{paper_id}.yaml"
 
         if paper_path.exists():
@@ -600,18 +748,20 @@ def run_daily_check():
 
         paper_data = {
             'title': paper['title'],
-            'authors': paper['authors'],
+            'authors': paper.get('authors', []),
             'year': paper.get('year'),
-            'abstract': paper.get('abstract'),
-            'summary': paper.get('abstract'),
+            'abstract': paper.get('abstract', ''),
+            'summary': paper.get('abstract', ''),
             'url': paper.get('url'),
             'tags': [],
             'categories': [],
             'status': 'discovered',
+            'source_type': paper.get('source_type', 'unknown'),
+            'source': paper.get('source', ''),
             'relevance_score': paper.get('relevance_score', 0),
             'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        paper_data = {k: v for k, v in paper_data.items() if v is not None}
+        paper_data = {k: v for k, v in paper_data.items() if v is not None and v != '' and v != []}
         save_yaml(paper_path, paper_data)
         print(f"  + [{paper['relevance_score']:.1f}] {paper['title'][:60]}")
 
@@ -644,3 +794,149 @@ def register_cards(cards_data):
 
     save_review_state(state)
     return len(cards_data["cards"])
+
+
+# ============ Disk Management ============
+
+# Max disk usage for PDFs in MB. Papers beyond this won't auto-download PDFs.
+PDF_BUDGET_MB = 500
+# Max number of "discovered" papers to keep (oldest get purged)
+MAX_DISCOVERED = 200
+
+
+def get_disk_usage():
+    """Get disk usage breakdown in bytes."""
+    usage = {"papers": 0, "cards": 0, "pdfs": 0, "total": 0}
+
+    for d, key in [(PAPERS_DIR, "papers"), (CARDS_DIR, "cards"), (BASE_DIR / "pdfs", "pdfs")]:
+        if d.exists():
+            for f in d.rglob("*"):
+                if f.is_file():
+                    usage[key] += f.stat().st_size
+
+    usage["total"] = sum(usage.values())
+    return usage
+
+
+def format_size(size_bytes):
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+
+
+def cleanup_old_discoveries(max_keep=MAX_DISCOVERED):
+    """Remove oldest 'discovered' papers that have no cards and no status change.
+    These are auto-fetched papers that were never promoted or engaged with."""
+    import yaml
+
+    papers = load_all_papers()
+    all_cards = load_all_cards()
+
+    # Find discovered papers with no cards
+    discovered = []
+    for pid, p in papers.items():
+        if p.get('status') == 'discovered' and pid not in all_cards:
+            added = p.get('added_at', '1970-01-01')
+            discovered.append((pid, added))
+
+    # Sort oldest first
+    discovered.sort(key=lambda x: x[1])
+
+    # Remove excess
+    to_remove = discovered[:-max_keep] if len(discovered) > max_keep else []
+    removed = 0
+
+    for pid, _ in to_remove:
+        paper_path = PAPERS_DIR / f"{pid}.yaml"
+        if paper_path.exists():
+            paper_path.unlink()
+            removed += 1
+
+    return removed
+
+
+def cleanup_pdfs_for_mastered():
+    """Remove PDFs for papers that are mastered (all cards interval > 30d).
+    The metadata and cards are kept — only the large PDF file is removed."""
+    import yaml
+
+    papers = load_all_papers()
+    state = load_review_state()
+    removed = 0
+    freed = 0
+
+    for pid, paper in papers.items():
+        pdf_path_str = paper.get('pdf_path')
+        if not pdf_path_str:
+            continue
+
+        pdf_full = BASE_DIR / pdf_path_str
+        if not pdf_full.exists():
+            continue
+
+        # Check if all cards for this paper are mastered (interval >= 30d)
+        paper_cards = [cid for cid, cs in state.get("cards", {}).items()
+                       if cs["paper_id"] == pid]
+
+        if not paper_cards:
+            continue
+
+        all_mastered = all(
+            state["cards"][cid]["interval_days"] >= 30
+            for cid in paper_cards
+        )
+
+        if all_mastered:
+            size = pdf_full.stat().st_size
+            pdf_full.unlink()
+            freed += size
+            removed += 1
+
+            # Update paper YAML to remove pdf_path
+            paper_path = PAPERS_DIR / f"{pid}.yaml"
+            with open(paper_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+            data.pop('pdf_path', None)
+            with open(paper_path, 'w') as f:
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return removed, freed
+
+
+def run_cleanup():
+    """Full cleanup: purge old discoveries + free PDF space."""
+    print("=== Disk Cleanup ===\n")
+
+    usage = get_disk_usage()
+    print(f"Current usage: papers={format_size(usage['papers'])}, "
+          f"cards={format_size(usage['cards'])}, "
+          f"pdfs={format_size(usage['pdfs'])}, "
+          f"total={format_size(usage['total'])}")
+
+    # Count papers
+    papers = load_all_papers()
+    status_counts = {}
+    for p in papers.values():
+        s = p.get('status', 'unknown')
+        status_counts[s] = status_counts.get(s, 0) + 1
+    print(f"Papers: {len(papers)} total — {status_counts}")
+
+    # Cleanup old discoveries
+    removed_disc = cleanup_old_discoveries()
+    if removed_disc:
+        print(f"\nRemoved {removed_disc} old discovered papers (no cards, exceeded {MAX_DISCOVERED} limit)")
+
+    # Cleanup mastered PDFs
+    removed_pdfs, freed = cleanup_pdfs_for_mastered()
+    if removed_pdfs:
+        print(f"Removed {removed_pdfs} PDFs for mastered papers (freed {format_size(freed)})")
+
+    if not removed_disc and not removed_pdfs:
+        print("\nNothing to clean up.")
+
+    # Final usage
+    usage = get_disk_usage()
+    print(f"\nFinal usage: {format_size(usage['total'])}")

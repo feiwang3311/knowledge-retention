@@ -281,51 +281,96 @@ def cmd_add_url(args):
     """Add a paper from arXiv URL with auto-fetched metadata."""
     ensure_dirs()
 
-    print(f"Fetching metadata from: {args.url}")
-    metadata = fetch_arxiv_metadata(args.url)
+    # Check if it's an arXiv URL
+    if 'arxiv.org' in args.url:
+        print(f"Fetching metadata from arXiv: {args.url}")
+        metadata = fetch_arxiv_metadata(args.url)
 
-    if not metadata:
-        print("Error: Could not fetch metadata. Is this a valid arXiv URL?")
-        return
+        if not metadata:
+            print("Error: Could not fetch arXiv metadata.")
+            return
 
-    print(f"\n=== Found Paper ===")
-    print(f"Title: {metadata['title']}")
-    print(f"Authors: {', '.join(metadata['authors'])}")
-    print(f"Year: {metadata['year']}")
+        print(f"\n=== Found Paper ===")
+        print(f"Title: {metadata['title']}")
+        print(f"Authors: {', '.join(metadata['authors'])}")
+        print(f"Year: {metadata['year']}")
 
-    paper_id = get_paper_id(metadata['title'], metadata['year'])
-    paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+        paper_id = get_paper_id(metadata['title'], metadata['year'])
+        paper_path = PAPERS_DIR / f"{paper_id}.yaml"
 
-    if paper_path.exists() and not args.force:
-        print(f"\nPaper already exists: {paper_id}")
-        print("Use --force to overwrite")
-        return
+        if paper_path.exists() and not args.force:
+            print(f"\nPaper already exists: {paper_id}")
+            print("Use --force to overwrite")
+            return
 
-    # Download PDF
-    pdf_path = download_pdf(metadata['pdf_url'], paper_id)
+        pdf_path = None
+        if args.pdf:
+            pdf_path = download_pdf(metadata['pdf_url'], paper_id)
 
-    # Build paper dict
-    paper = {
-        'title': metadata['title'],
-        'authors': metadata['authors'],
-        'year': metadata['year'],
-        'abstract': metadata['abstract'],
-        'summary': metadata['abstract'],  # Use abstract as summary by default
-        'url': metadata['url'],
-        'pdf_path': pdf_path,
-        'tags': args.tags.split(',') if args.tags else [],
-        'categories': args.categories.split(',') if args.categories else [],
-        'status': 'unread',
-        'interest_level': args.interest,
-        'recommended_by': args.source,
-        'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+        paper = {
+            'title': metadata['title'],
+            'authors': metadata['authors'],
+            'year': metadata['year'],
+            'abstract': metadata['abstract'],
+            'summary': metadata['abstract'],
+            'url': metadata['url'],
+            'pdf_url': metadata['pdf_url'],
+            'pdf_path': pdf_path,
+            'tags': [t.strip() for t in args.tags.split(',') if t.strip()] if args.tags else [],
+            'categories': [c.strip() for c in args.categories.split(',') if c.strip()] if args.categories else [],
+            'status': 'unread',
+            'source_type': 'arxiv',
+            'interest_level': args.interest,
+            'recommended_by': args.source,
+            'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    else:
+        # Generic URL: blog post, article, etc.
+        print(f"Scraping web page: {args.url}")
+        from retention import scrape_web_page
+        scraped = scrape_web_page(args.url)
+
+        if not scraped:
+            print("Error: Could not fetch page content.")
+            return
+
+        title = scraped['title']
+        description = scraped['description'] or scraped['text'][:300]
+
+        print(f"\n=== Found Content ===")
+        print(f"Title: {title}")
+        print(f"Description: {description[:100]}...")
+
+        year = datetime.now().year
+        paper_id = get_paper_id(title, year)
+        paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+
+        if paper_path.exists() and not args.force:
+            print(f"\nAlready exists: {paper_id}")
+            print("Use --force to overwrite")
+            return
+
+        paper = {
+            'title': title,
+            'authors': [],
+            'year': year,
+            'abstract': description,
+            'summary': description,
+            'url': args.url,
+            'tags': [t.strip() for t in args.tags.split(',') if t.strip()] if args.tags else [],
+            'categories': [c.strip() for c in args.categories.split(',') if c.strip()] if args.categories else [],
+            'status': 'unread',
+            'source_type': 'web',
+            'interest_level': args.interest,
+            'recommended_by': args.source,
+            'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     # Remove None/empty values
     paper = {k: v for k, v in paper.items() if v is not None and v != []}
 
     save_yaml(paper_path, paper)
-    print(f"\n✓ Paper saved: {paper_id}")
+    print(f"\n✓ Saved: {paper_id}")
 
 
 def cmd_list(args):
@@ -872,6 +917,35 @@ def cmd_serve(_args):
     server_main()
 
 
+def cmd_cleanup(_args):
+    """Clean up disk: remove old discoveries and PDFs for mastered papers."""
+    from retention import run_cleanup
+    run_cleanup()
+
+
+def cmd_disk(_args):
+    """Show disk usage breakdown."""
+    from retention import get_disk_usage, format_size, load_all_papers, load_all_cards
+    usage = get_disk_usage()
+    papers = load_all_papers()
+    all_cards = load_all_cards()
+
+    status_counts = {}
+    for p in papers.values():
+        s = p.get('status', 'unknown')
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    print(f"\n=== Disk Usage ===")
+    print(f"  Papers (YAML):  {format_size(usage['papers'])} ({len(papers)} files)")
+    print(f"  Cards (JSON):   {format_size(usage['cards'])} ({len(all_cards)} files)")
+    print(f"  PDFs:           {format_size(usage['pdfs'])}")
+    print(f"  Total:          {format_size(usage['total'])}")
+    print(f"\n=== Paper Status ===")
+    for status, count in sorted(status_counts.items()):
+        print(f"  {status}: {count}")
+    print(f"\nPDF budget: 500MB")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Paper Reading Database CLI",
@@ -898,12 +972,13 @@ Examples:
 
     # add-url
     add_url_parser = subparsers.add_parser('add-url', help='Add paper from arXiv URL')
-    add_url_parser.add_argument('url', help='arXiv URL (abs or pdf)')
+    add_url_parser.add_argument('url', help='Any URL (arXiv, blog, article)')
     add_url_parser.add_argument('--interest', '-i', type=int, help='Interest level (0-5)')
     add_url_parser.add_argument('--categories', '-c', help='Categories (comma-separated)')
     add_url_parser.add_argument('--tags', '-t', help='Tags (comma-separated)')
     add_url_parser.add_argument('--source', '-s', help='Recommended by (person/org)')
     add_url_parser.add_argument('--force', '-f', action='store_true', help='Overwrite if exists')
+    add_url_parser.add_argument('--pdf', action='store_true', help='Download PDF (arXiv only, off by default)')
 
     # list
     list_parser = subparsers.add_parser('list', help='List papers')
@@ -959,6 +1034,12 @@ Examples:
     # serve
     subparsers.add_parser('serve', help='Start web review server')
 
+    # cleanup
+    subparsers.add_parser('cleanup', help='Clean up disk (old discoveries + mastered PDFs)')
+
+    # disk
+    subparsers.add_parser('disk', help='Show disk usage breakdown')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -982,6 +1063,8 @@ Examples:
         'review': cmd_review,
         'daily': cmd_daily,
         'serve': cmd_serve,
+        'cleanup': cmd_cleanup,
+        'disk': cmd_disk,
     }
 
     if args.command in commands:

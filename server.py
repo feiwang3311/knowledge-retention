@@ -4,11 +4,18 @@ Knowledge Retention HTTP Server
 Minimal JSON API for the review web UI. Uses stdlib only.
 """
 
+import hashlib
 import json
 import os
+import re
+import subprocess
 import sys
+import tempfile
+import threading
+from datetime import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 
 # Add parent to path for imports
@@ -21,8 +28,15 @@ from retention import (
     register_cards, run_daily_check,
 )
 
+import yaml
+
 BASE_DIR = Path(__file__).parent
 PORT = int(os.environ.get("RETENTION_PORT", 8234))
+TTS_CACHE_DIR = BASE_DIR / ".tts_cache"
+TTS_VOICE = "en-US-AriaNeural"  # Natural-sounding Microsoft neural voice
+
+# Lock for review_state.json writes (thread safety)
+_review_state_lock = threading.Lock()
 
 
 def json_response(handler, data, status=200):
@@ -34,10 +48,23 @@ def json_response(handler, data, status=200):
 
 
 def read_body(handler):
-    length = int(handler.headers.get("Content-Length", 0))
-    if length == 0:
+    try:
+        length = int(handler.headers.get("Content-Length", 0))
+    except (ValueError, TypeError):
         return {}
-    return json.loads(handler.rfile.read(length).decode('utf-8'))
+    if length <= 0 or length > 10 * 1024 * 1024:  # 10MB max
+        return {}
+    try:
+        return json.loads(handler.rfile.read(length).decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+
+
+def sanitize_paper_id(paper_id):
+    """Reject paper IDs with path traversal characters."""
+    if not paper_id or '..' in paper_id or '/' in paper_id or '\\' in paper_id:
+        return None
+    return paper_id
 
 
 class RetentionHandler(SimpleHTTPRequestHandler):
@@ -68,14 +95,23 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         elif path == "/api/papers":
             self.api_papers()
         elif path.startswith("/api/papers/"):
-            paper_id = path[len("/api/papers/"):]
-            self.api_paper_detail(paper_id)
+            paper_id = sanitize_paper_id(path[len("/api/papers/"):])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_paper_detail(paper_id)
         elif path.startswith("/api/cards/"):
-            paper_id = path[len("/api/cards/"):]
-            self.api_cards(paper_id)
+            paper_id = sanitize_paper_id(path[len("/api/cards/"):])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_cards(paper_id)
         elif path.startswith("/api/connections/"):
-            paper_id = path[len("/api/connections/"):]
-            self.api_connections(paper_id)
+            paper_id = sanitize_paper_id(path[len("/api/connections/"):])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_connections(paper_id)
         else:
             # Silently return 404 for favicon etc
             self.send_response(404)
@@ -87,12 +123,20 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/review/answer":
             self.api_review_answer()
+        elif path == "/api/tts":
+            self.api_tts()
         elif path.startswith("/api/cards/generate/"):
-            paper_id = path[len("/api/cards/generate/"):]
-            self.api_generate_cards(paper_id)
+            paper_id = sanitize_paper_id(path[len("/api/cards/generate/"):])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_generate_cards(paper_id)
         elif path.startswith("/api/papers/") and path.endswith("/status"):
-            paper_id = path[len("/api/papers/"):-len("/status")]
-            self.api_update_status(paper_id)
+            paper_id = sanitize_paper_id(path[len("/api/papers/"):-len("/status")])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_update_status(paper_id)
         else:
             self.send_response(404)
             self.end_headers()
@@ -187,13 +231,20 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             json_response(self, {"error": "card_id and quality required"}, 400)
             return
 
-        state = load_review_state()
-        if card_id not in state["cards"]:
-            json_response(self, {"error": f"Card not found: {card_id}"}, 404)
+        try:
+            quality = int(quality)
+        except (ValueError, TypeError):
+            json_response(self, {"error": "quality must be a number"}, 400)
             return
 
-        SM2.schedule(state["cards"][card_id], int(quality))
-        save_review_state(state)
+        with _review_state_lock:
+            state = load_review_state()
+            if card_id not in state.get("cards", {}):
+                json_response(self, {"error": f"Card not found: {card_id}"}, 404)
+                return
+
+            SM2.schedule(state["cards"][card_id], quality)
+            save_review_state(state)
 
         json_response(self, {
             "ok": True,
@@ -212,7 +263,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             # Count due cards for this paper
             due_count = sum(
                 1 for cid, cs in state.get("cards", {}).items()
-                if cs["paper_id"] == pid and cs["next_review"] <= __import__('datetime').datetime.now().strftime("%Y-%m-%d")
+                if cs["paper_id"] == pid and cs["next_review"] <= datetime.now().strftime("%Y-%m-%d")
             )
             result.append({
                 "id": pid,
@@ -287,7 +338,11 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             json_response(self, {"error": "status required"}, 400)
             return
 
-        import yaml
+        VALID_STATUSES = {'discovered', 'queued', 'unread', 'reading', 'read', 'reviewing', 'mastered'}
+        if new_status not in VALID_STATUSES:
+            json_response(self, {"error": f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}"}, 400)
+            return
+
         paper_path = BASE_DIR / "papers" / f"{paper_id}.yaml"
         if not paper_path.exists():
             json_response(self, {"error": "Paper not found"}, 404)
@@ -302,13 +357,53 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             paper['status_history'] = []
         paper['status_history'].append({
             'status': new_status,
-            'at': __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
         with open(paper_path, 'w') as f:
             yaml.dump(paper, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         json_response(self, {"ok": True, "status": new_status})
+
+    def api_tts(self):
+        """Generate speech audio from text using edge-tts."""
+        body = read_body(self)
+        text = body.get("text", "").strip()
+        if not text:
+            json_response(self, {"error": "text required"}, 400)
+            return
+
+        # Cache by text hash
+        TTS_CACHE_DIR.mkdir(exist_ok=True)
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        cache_path = TTS_CACHE_DIR / f"{text_hash}.mp3"
+
+        if not cache_path.exists():
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "edge_tts",
+                     "--voice", TTS_VOICE,
+                     "--text", text,
+                     "--write-media", str(cache_path)],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode != 0:
+                    json_response(self, {"error": f"TTS failed: {result.stderr}"}, 500)
+                    return
+            except Exception as e:
+                json_response(self, {"error": str(e)}, 500)
+                return
+
+        # Serve the mp3
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "public, max-age=86400")
+        with open(cache_path, 'rb') as f:
+            data = f.read()
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def log_message(self, format, *args):
         # Quieter logging - suppress API request logs
@@ -321,8 +416,12 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         super().log_message(format, *args)
 
 
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 def main():
-    server = HTTPServer(("127.0.0.1", PORT), RetentionHandler)
+    server = ThreadedHTTPServer(("127.0.0.1", PORT), RetentionHandler)
     print(f"Knowledge Retention Server running at http://127.0.0.1:{PORT}")
     print("Press Ctrl+C to stop")
     try:

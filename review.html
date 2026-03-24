@@ -225,6 +225,70 @@ header h1 { font-size: 20px; font-weight: 600; }
 
 .rating-buttons.hidden { display: none; }
 
+/* Audio controls */
+.audio-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.audio-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.audio-btn:hover { color: var(--text); border-color: var(--accent); }
+.audio-btn.speaking { color: var(--accent); border-color: var(--accent); }
+
+.audio-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.audio-toggle label { cursor: pointer; }
+
+.toggle-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background: var(--surface2);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border: 1px solid var(--border);
+}
+
+.toggle-switch.on { background: var(--accent); border-color: var(--accent); }
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle-switch.on::after { transform: translateX(16px); }
+
 /* Progress bar */
 .progress-bar {
   height: 4px;
@@ -505,6 +569,72 @@ const API = '';
 let dashboardData = null;
 let papersData = null;
 let reviewSession = null;
+let autoReadQuestion = localStorage.getItem('autoReadQuestion') === 'true';
+let autoReadAnswer = localStorage.getItem('autoReadAnswer') === 'true';
+
+// ---- Text-to-Speech (edge-tts via server) ----
+
+const tts = {
+  audio: null,
+  speaking: false,
+  blobCache: {},  // text -> blob URL, in-memory cache for instant playback
+
+  async fetchAudio(text) {
+    if (this.blobCache[text]) return this.blobCache[text];
+    try {
+      const res = await fetch(API + '/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      this.blobCache[text] = url;
+      return url;
+    } catch (e) {
+      console.error('TTS fetch error:', e);
+      return null;
+    }
+  },
+
+  async speak(text) {
+    this.stop();
+    const url = await this.fetchAudio(text);
+    if (!url) return;
+    this.audio = new Audio(url);
+    this.audio.onended = () => { this.speaking = false; };
+    this.audio.onerror = () => { this.speaking = false; };
+    this.speaking = true;
+    this.audio.play();
+  },
+
+  stop() {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.currentTime = 0;
+      this.audio = null;
+    }
+    this.speaking = false;
+  },
+
+  toggle(text) {
+    if (this.speaking) {
+      this.stop();
+    } else {
+      this.speak(text);
+    }
+  }
+};
+
+function prefetchAllTTS() {
+  if (!reviewSession) return;
+  // Fire off all TTS requests in parallel — they'll be cached
+  for (const card of reviewSession.cards) {
+    tts.fetchAudio(card.question);
+    tts.fetchAudio(card.answer);
+  }
+}
 
 // ---- API Calls ----
 
@@ -631,6 +761,7 @@ function startReview() {
     current: 0,
     results: [],
     startTime: Date.now(),
+    prefetched: new Set(),
   };
 
   if (reviewSession.cards.length === 0) {
@@ -638,6 +769,8 @@ function startReview() {
     return;
   }
 
+  // Pre-generate TTS for all cards in background
+  prefetchAllTTS();
   showCard();
 }
 
@@ -686,15 +819,37 @@ function showCard() {
   area.innerHTML = `
     <div class="review-progress">
       <span>Card ${s.current + 1} of ${s.cards.length}</span>
-      <span>${card.type}</span>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span>${card.type}</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim);">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <span class="toggle-switch ${autoReadQuestion ? 'on' : ''}" onclick="toggleAutoRead('question', this)"></span>
+            Auto-read Q
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <span class="toggle-switch ${autoReadAnswer ? 'on' : ''}" onclick="toggleAutoRead('answer', this)"></span>
+            Auto-read A
+          </label>
+        </div>
+      </div>
     </div>
     <div class="progress-bar"><div class="fill" style="width: ${progress}%"></div></div>
 
-    <div class="flashcard">
+    <div class="flashcard" style="position:relative;">
       <div class="paper-tag">${card.paper_title}</div>
       <div class="card-type">${card.type} &middot; difficulty ${card.difficulty || '?'}</div>
       <div class="question">${card.question}</div>
+      <div class="audio-controls">
+        <button class="audio-btn" onclick="tts.toggle(document.querySelector('.question').textContent)" title="Read question aloud">
+          &#9654; Question
+        </button>
+      </div>
       <div class="answer hidden" id="answer-text">${card.answer}</div>
+      <div class="audio-controls hidden" id="answer-audio">
+        <button class="audio-btn" onclick="tts.toggle(document.getElementById('answer-text').textContent)" title="Read answer aloud">
+          &#9654; Answer
+        </button>
+      </div>
     </div>
 
     <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">
@@ -720,6 +875,11 @@ function showCard() {
       </button>
     </div>
   `;
+
+  // Auto-read question if enabled
+  if (autoReadQuestion) {
+    tts.speak(card.question);
+  }
 }
 
 function estimateInterval(card, quality) {
@@ -747,12 +907,31 @@ function estimateInterval(card, quality) {
 }
 
 function revealAnswer() {
+  tts.stop();
   document.getElementById('answer-text').classList.remove('hidden');
+  document.getElementById('answer-audio').classList.remove('hidden');
   document.getElementById('reveal-btn').style.display = 'none';
   document.getElementById('rating-btns').classList.remove('hidden');
+
+  if (autoReadAnswer) {
+    const answerText = document.getElementById('answer-text').textContent;
+    tts.speak(answerText);
+  }
+}
+
+function toggleAutoRead(type, el) {
+  if (type === 'question') {
+    autoReadQuestion = !autoReadQuestion;
+    localStorage.setItem('autoReadQuestion', autoReadQuestion);
+  } else {
+    autoReadAnswer = !autoReadAnswer;
+    localStorage.setItem('autoReadAnswer', autoReadAnswer);
+  }
+  el.classList.toggle('on');
 }
 
 async function rateCard(quality) {
+  tts.stop();
   const card = reviewSession.cards[reviewSession.current];
 
   // Submit to server
