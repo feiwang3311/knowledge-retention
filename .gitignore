@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.python-version
+
+# Personal data (create these locally)
+papers/
+cards/
+pdfs/
+review_state.json
+interests.yaml
+feeds.yaml
+connections.yaml
+daily.log

@@ -1,0 +1,11 @@
+projects:
+  - name: "My Research Area"
+    keywords: [keyword1, keyword2, keyword3]
+    weight: 1.0
+  - name: "Side Interest"
+    keywords: [topic1, topic2]
+    weight: 0.7
+
+topics:
+  - general topic 1
+  - general topic 2

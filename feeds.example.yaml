@@ -1,0 +1,9 @@
+arxiv_searches:
+  - query: "your search query"
+    categories: [cs.AI, cs.LG]
+    max_results: 5
+  - query: "another topic"
+    categories: [cs.PL]
+    max_results: 3
+check_interval_hours: 24
+last_checked: null

@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Retention</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface2: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --purple: #bc8cff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* Layout */
+.app { max-width: 960px; margin: 0 auto; padding: 16px; }
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+header h1 { font-size: 20px; font-weight: 600; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.tab:hover { color: var(--text); background: var(--surface2); }
+.tab.active { color: var(--text); background: var(--accent); }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Cards */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.stat-card .number {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stat-card .label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-card.due .number { color: var(--orange); }
+.stat-card.mastered .number { color: var(--green); }
+.stat-card.learning .number { color: var(--accent); }
+
+/* Pipeline */
+.pipeline {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+
+.pipeline-stage {
+  flex: 1;
+  min-width: 100px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.pipeline-stage .count { font-size: 24px; font-weight: 700; }
+.pipeline-stage .name { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+
+/* Review */
+.review-container { max-width: 640px; margin: 0 auto; }
+
+.flashcard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  margin: 24px 0;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.flashcard .paper-tag {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.flashcard .card-type {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface2);
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+.flashcard .question {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.flashcard .answer {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  font-size: 16px;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.flashcard .answer.hidden { display: none; }
+
+.reveal-btn {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.reveal-btn:hover { background: var(--border); }
+
+.rating-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.rating-btn {
+  padding: 12px 8px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 0.1s, opacity 0.1s;
+}
+
+.rating-btn:hover { transform: scale(1.03); }
+.rating-btn:active { transform: scale(0.97); }
+
+.rating-btn.forgot { background: var(--red); color: white; }
+.rating-btn.hard { background: var(--orange); color: white; }
+.rating-btn.good { background: var(--green); color: white; }
+.rating-btn.easy { background: var(--accent); color: white; }
+
+.rating-btn .interval {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.rating-buttons.hidden { display: none; }
+
+/* Progress bar */
+.progress-bar {
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+  margin: 16px 0;
+  overflow: hidden;
+}
+
+.progress-bar .fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.review-progress {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Session summary */
+.session-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+}
+
+.session-summary h2 { margin-bottom: 16px; }
+
+.summary-stats {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin: 20px 0;
+}
+
+.summary-stat .value { font-size: 28px; font-weight: 700; }
+.summary-stat .label { font-size: 12px; color: var(--text-dim); }
+
+/* Papers table */
+.paper-list { margin-top: 16px; }
+
+.paper-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s;
+}
+
+.paper-item:hover { border-color: var(--accent); }
+
+.paper-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.paper-title {
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.paper-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.badge.status-discovered { background: #1f2937; color: var(--text-dim); }
+.badge.status-queued { background: #1e293b; color: var(--accent); }
+.badge.status-unread { background: #1e293b; color: var(--accent); }
+.badge.status-reading { background: #422006; color: var(--orange); }
+.badge.status-read { background: #052e16; color: var(--green); }
+.badge.status-reviewing { background: #2e1065; color: var(--purple); }
+.badge.status-mastered { background: #052e16; color: var(--green); }
+
+.badge.cards { background: var(--surface2); color: var(--text-dim); }
+.badge.cards.has-due { background: #422006; color: var(--orange); }
+
+.paper-details {
+  display: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.paper-details.open { display: block; }
+
+.paper-info { font-size: 13px; color: var(--text-dim); margin: 4px 0; }
+.paper-tags { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0; }
+.paper-tags .tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--surface2);
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.paper-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn:hover { background: var(--border); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn.primary:hover { opacity: 0.9; }
+
+.status-select {
+  padding: 4px 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* Start review */
+.start-review {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.start-review h2 { font-size: 24px; margin-bottom: 8px; }
+.start-review p { color: var(--text-dim); margin-bottom: 24px; }
+
+.start-btn {
+  padding: 14px 40px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.start-btn:hover { opacity: 0.9; }
+.start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-dim);
+}
+
+/* Loading */
+.loading { text-align: center; padding: 32px; color: var(--text-dim); }
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-bar select, .filter-bar input {
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.filter-bar input { flex: 1; min-width: 200px; }
+
+/* Toast notifications */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 100;
+  animation: slideIn 0.2s ease-out;
+}
+
+.toast.success { border-color: var(--green); }
+.toast.error { border-color: var(--red); }
+
+@keyframes slideIn {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <h1>Knowledge Retention</h1>
+    <div class="tabs">
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="review">Review</button>
+      <button class="tab" data-tab="papers">Papers</button>
+    </div>
+  </header>
+
+  <!-- Dashboard -->
+  <div id="dashboard" class="tab-content active">
+    <div class="stat-grid" id="stats-grid"></div>
+    <h3 style="margin: 24px 0 8px; font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;">Reading Pipeline</h3>
+    <div class="pipeline" id="pipeline"></div>
+    <div style="margin-top: 24px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;">Due Today</h3>
+        <button class="btn primary" onclick="startReview()" id="dash-review-btn">Start Review</button>
+      </div>
+      <div id="due-preview" style="margin-top: 12px;"></div>
+    </div>
+  </div>
+
+  <!-- Review -->
+  <div id="review" class="tab-content">
+    <div class="review-container" id="review-area"></div>
+  </div>
+
+  <!-- Papers -->
+  <div id="papers" class="tab-content">
+    <div class="filter-bar">
+      <select id="status-filter" onchange="renderPapers()">
+        <option value="">All statuses</option>
+        <option value="discovered">Discovered</option>
+        <option value="queued">Queued</option>
+        <option value="unread">Unread</option>
+        <option value="reading">Reading</option>
+        <option value="read">Read</option>
+        <option value="reviewing">Reviewing</option>
+        <option value="mastered">Mastered</option>
+      </select>
+      <input type="text" id="search-input" placeholder="Search papers..." oninput="renderPapers()">
+    </div>
+    <div id="paper-list" class="paper-list"></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+// State
+let dashboardData = null;
+let papersData = null;
+let reviewSession = null;
+
+// ---- API Calls ----
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  return res.json();
+}
+
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ---- Tabs ----
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+
+    // Load data on tab switch
+    if (tab.dataset.tab === 'dashboard') loadDashboard();
+    if (tab.dataset.tab === 'papers') loadPapers();
+    if (tab.dataset.tab === 'review') showReviewStart();
+  });
+});
+
+// ---- Dashboard ----
+
+async function loadDashboard() {
+  const el = document.getElementById('stats-grid');
+  el.innerHTML = '<div class="loading">Loading...</div>';
+
+  dashboardData = await api('/api/dashboard');
+  const s = dashboardData.stats;
+
+  el.innerHTML = `
+    <div class="stat-card due">
+      <div class="number">${s.due_today}</div>
+      <div class="label">Due Today</div>
+    </div>
+    <div class="stat-card learning">
+      <div class="number">${s.upcoming_7d}</div>
+      <div class="label">Next 7 Days</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">${s.total}</div>
+      <div class="label">Total Cards</div>
+    </div>
+    <div class="stat-card mastered">
+      <div class="number">${s.mastered}</div>
+      <div class="label">Mastered</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">${dashboardData.total_papers}</div>
+      <div class="label">Papers</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">${dashboardData.papers_with_cards}</div>
+      <div class="label">With Cards</div>
+    </div>
+  `;
+
+  // Pipeline
+  const pipeline = document.getElementById('pipeline');
+  const stages = ['discovered', 'queued', 'unread', 'reading', 'read', 'reviewing', 'mastered'];
+  const p = dashboardData.pipeline;
+  pipeline.innerHTML = stages.map(stage => `
+    <div class="pipeline-stage">
+      <div class="count">${p[stage] || 0}</div>
+      <div class="name">${stage}</div>
+    </div>
+  `).join('');
+
+  // Due cards preview
+  const preview = document.getElementById('due-preview');
+  const due = dashboardData.due_cards;
+  const btn = document.getElementById('dash-review-btn');
+
+  if (due.length === 0) {
+    preview.innerHTML = '<div class="empty-state">No cards due today. Great job!</div>';
+    btn.disabled = true;
+    btn.textContent = 'All caught up';
+  } else {
+    btn.disabled = false;
+    btn.textContent = `Start Review (${due.length})`;
+
+    // Group by paper
+    const byPaper = {};
+    due.forEach(c => {
+      if (!byPaper[c.paper_id]) byPaper[c.paper_id] = { title: c.paper_title, cards: [] };
+      byPaper[c.paper_id].cards.push(c);
+    });
+
+    preview.innerHTML = Object.entries(byPaper).map(([pid, data]) => `
+      <div class="paper-item" style="padding: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-weight: 500; font-size: 14px;">${data.title}</span>
+          <span class="badge cards has-due">${data.cards.length} cards due</span>
+        </div>
+      </div>
+    `).join('');
+  }
+}
+
+// ---- Review Session ----
+
+function startReview() {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="review"]').classList.add('active');
+  document.getElementById('review').classList.add('active');
+
+  reviewSession = {
+    cards: [...(dashboardData?.due_cards || [])],
+    current: 0,
+    results: [],
+    startTime: Date.now(),
+  };
+
+  if (reviewSession.cards.length === 0) {
+    showReviewStart();
+    return;
+  }
+
+  showCard();
+}
+
+function showReviewStart() {
+  const area = document.getElementById('review-area');
+  const count = dashboardData?.stats?.due_today || '...';
+
+  if (!dashboardData) {
+    api('/api/dashboard').then(data => {
+      dashboardData = data;
+      showReviewStart();
+    });
+    area.innerHTML = '<div class="loading">Loading...</div>';
+    return;
+  }
+
+  if (dashboardData.stats.due_today === 0) {
+    area.innerHTML = `
+      <div class="start-review">
+        <h2>All caught up!</h2>
+        <p>No cards due for review right now. Check back later.</p>
+      </div>`;
+    return;
+  }
+
+  area.innerHTML = `
+    <div class="start-review">
+      <h2>${count} cards due</h2>
+      <p>Review your knowledge cards with active recall</p>
+      <button class="start-btn" onclick="startReview()">Start Review</button>
+    </div>`;
+}
+
+function showCard() {
+  const area = document.getElementById('review-area');
+  const s = reviewSession;
+
+  if (s.current >= s.cards.length) {
+    showSessionSummary();
+    return;
+  }
+
+  const card = s.cards[s.current];
+  const progress = ((s.current) / s.cards.length * 100).toFixed(0);
+
+  area.innerHTML = `
+    <div class="review-progress">
+      <span>Card ${s.current + 1} of ${s.cards.length}</span>
+      <span>${card.type}</span>
+    </div>
+    <div class="progress-bar"><div class="fill" style="width: ${progress}%"></div></div>
+
+    <div class="flashcard">
+      <div class="paper-tag">${card.paper_title}</div>
+      <div class="card-type">${card.type} &middot; difficulty ${card.difficulty || '?'}</div>
+      <div class="question">${card.question}</div>
+      <div class="answer hidden" id="answer-text">${card.answer}</div>
+    </div>
+
+    <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">
+      Show Answer
+    </button>
+
+    <div class="rating-buttons hidden" id="rating-btns">
+      <button class="rating-btn forgot" onclick="rateCard(1)">
+        Forgot
+        <span class="interval">1d</span>
+      </button>
+      <button class="rating-btn hard" onclick="rateCard(3)">
+        Hard
+        <span class="interval">${estimateInterval(card, 3)}</span>
+      </button>
+      <button class="rating-btn good" onclick="rateCard(4)">
+        Good
+        <span class="interval">${estimateInterval(card, 4)}</span>
+      </button>
+      <button class="rating-btn easy" onclick="rateCard(5)">
+        Easy
+        <span class="interval">${estimateInterval(card, 5)}</span>
+      </button>
+    </div>
+  `;
+}
+
+function estimateInterval(card, quality) {
+  let ef = card.ease_factor || 2.5;
+  let interval = card.interval_days || 0;
+  let reps = card.repetitions || 0;
+
+  let newEf = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+  newEf = Math.max(1.3, newEf);
+
+  let newInterval;
+  if (quality < 3) {
+    newInterval = 1;
+  } else {
+    reps += 1;
+    if (reps === 1) newInterval = 1;
+    else if (reps === 2) newInterval = 6;
+    else newInterval = Math.round(interval * newEf);
+  }
+
+  if (newInterval === 1) return '1d';
+  if (newInterval < 7) return `${newInterval}d`;
+  if (newInterval < 30) return `${Math.round(newInterval / 7)}w`;
+  return `${Math.round(newInterval / 30)}mo`;
+}
+
+function revealAnswer() {
+  document.getElementById('answer-text').classList.remove('hidden');
+  document.getElementById('reveal-btn').style.display = 'none';
+  document.getElementById('rating-btns').classList.remove('hidden');
+}
+
+async function rateCard(quality) {
+  const card = reviewSession.cards[reviewSession.current];
+
+  // Submit to server
+  const result = await api('/api/review/answer', {
+    method: 'POST',
+    body: JSON.stringify({ card_id: card.id, quality }),
+  });
+
+  reviewSession.results.push({ card_id: card.id, quality, ...result });
+  reviewSession.current++;
+
+  showCard();
+}
+
+function showSessionSummary() {
+  const area = document.getElementById('review-area');
+  const s = reviewSession;
+  const elapsed = Math.round((Date.now() - s.startTime) / 1000);
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+
+  const forgot = s.results.filter(r => r.quality === 1).length;
+  const hard = s.results.filter(r => r.quality === 3).length;
+  const good = s.results.filter(r => r.quality === 4).length;
+  const easy = s.results.filter(r => r.quality === 5).length;
+
+  area.innerHTML = `
+    <div class="session-summary">
+      <h2>Session Complete!</h2>
+      <p style="color: var(--text-dim);">${s.cards.length} cards reviewed in ${mins}m ${secs}s</p>
+
+      <div class="summary-stats">
+        <div class="summary-stat">
+          <div class="value" style="color: var(--red);">${forgot}</div>
+          <div class="label">Forgot</div>
+        </div>
+        <div class="summary-stat">
+          <div class="value" style="color: var(--orange);">${hard}</div>
+          <div class="label">Hard</div>
+        </div>
+        <div class="summary-stat">
+          <div class="value" style="color: var(--green);">${good}</div>
+          <div class="label">Good</div>
+        </div>
+        <div class="summary-stat">
+          <div class="value" style="color: var(--accent);">${easy}</div>
+          <div class="label">Easy</div>
+        </div>
+      </div>
+
+      <button class="btn primary" onclick="loadDashboard(); document.querySelectorAll('.tab')[0].click();" style="margin-top: 16px;">
+        Back to Dashboard
+      </button>
+    </div>
+  `;
+
+  // Refresh dashboard data
+  dashboardData = null;
+}
+
+// ---- Papers ----
+
+async function loadPapers() {
+  const el = document.getElementById('paper-list');
+  el.innerHTML = '<div class="loading">Loading...</div>';
+  papersData = await api('/api/papers');
+  renderPapers();
+}
+
+function renderPapers() {
+  if (!papersData) return;
+
+  const statusFilter = document.getElementById('status-filter').value;
+  const searchQuery = document.getElementById('search-input').value.toLowerCase();
+
+  let papers = papersData.papers;
+
+  if (statusFilter) {
+    papers = papers.filter(p => p.status === statusFilter);
+  }
+
+  if (searchQuery) {
+    papers = papers.filter(p =>
+      p.title.toLowerCase().includes(searchQuery) ||
+      (p.tags || []).some(t => t.includes(searchQuery)) ||
+      (p.categories || []).some(c => c.toLowerCase().includes(searchQuery))
+    );
+  }
+
+  const el = document.getElementById('paper-list');
+
+  if (papers.length === 0) {
+    el.innerHTML = '<div class="empty-state">No papers found</div>';
+    return;
+  }
+
+  el.innerHTML = papers.map(p => `
+    <div class="paper-item" id="paper-${p.id}">
+      <div class="paper-header">
+        <span class="paper-title" onclick="togglePaperDetails('${p.id}')">${p.title}</span>
+        <div class="paper-meta">
+          ${p.due_count > 0 ? `<span class="badge cards has-due">${p.due_count} due</span>` : ''}
+          <span class="badge cards">${p.card_count} cards</span>
+          <span class="badge status-${p.status}">${p.status}</span>
+        </div>
+      </div>
+      <div class="paper-details" id="details-${p.id}">
+        <div class="paper-info">${(p.authors || []).join(', ')} &middot; ${p.year || '?'}</div>
+        <div class="paper-tags">
+          ${(p.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
+          ${(p.categories || []).map(c => `<span class="tag">${c}</span>`).join('')}
+        </div>
+        <div class="paper-actions">
+          <select class="status-select" onchange="updatePaperStatus('${p.id}', this.value)">
+            ${['discovered','queued','unread','reading','read','reviewing','mastered'].map(s =>
+              `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`
+            ).join('')}
+          </select>
+          <button class="btn ${p.card_count === 0 ? 'primary' : ''}" onclick="generateCards('${p.id}')" ${p.card_count > 0 ? '' : ''}>
+            ${p.card_count > 0 ? 'Regenerate Cards' : 'Generate Cards'}
+          </button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function togglePaperDetails(id) {
+  const el = document.getElementById(`details-${id}`);
+  el.classList.toggle('open');
+}
+
+async function updatePaperStatus(paperId, status) {
+  await api(`/api/papers/${paperId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ status }),
+  });
+  toast(`Status updated to ${status}`);
+  // Update local data
+  const paper = papersData.papers.find(p => p.id === paperId);
+  if (paper) paper.status = status;
+}
+
+async function generateCards(paperId) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+
+  try {
+    const result = await api(`/api/cards/generate/${paperId}`, { method: 'POST' });
+    if (result.ok) {
+      toast(`Generated ${result.cards_generated} cards`);
+      loadPapers(); // Refresh
+    } else {
+      toast(result.error || 'Generation failed', 'error');
+    }
+  } catch (e) {
+    toast('Generation failed: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Generate Cards';
+}
+
+// ---- Keyboard shortcuts ----
+
+document.addEventListener('keydown', (e) => {
+  if (!reviewSession || reviewSession.current >= reviewSession.cards.length) return;
+
+  const answerVisible = !document.getElementById('answer-text')?.classList.contains('hidden');
+
+  if (e.code === 'Space' && !answerVisible) {
+    e.preventDefault();
+    revealAnswer();
+  } else if (answerVisible) {
+    if (e.key === '1') rateCard(1);
+    else if (e.key === '2') rateCard(3);
+    else if (e.key === '3') rateCard(4);
+    else if (e.key === '4') rateCard(5);
+  }
+});
+
+// ---- Init ----
+loadDashboard();
+</script>
+</body>
+</html>
