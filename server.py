@@ -783,6 +783,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         """Return papers available for radio (those with cards)."""
         papers = load_all_papers()
         all_cards = load_all_cards()
+        studied = get_studied_paper_ids(papers)
         available = []
         for pid, p in papers.items():
             if pid in all_cards and all_cards[pid].get('cards'):
@@ -791,7 +792,10 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                     "title": p.get("title", "Unknown"),
                     "card_count": len(all_cards[pid]["cards"]),
                     "categories": p.get("categories", []),
+                    "studied": pid in studied,
                 })
+        # Studied papers first
+        available.sort(key=lambda x: (not x["studied"], x["title"]))
         json_response(self, {"papers": available})
 
     def api_radio_playlist(self):
@@ -808,12 +812,19 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
         segments = []
 
+        # Only include studied papers by default (or specific papers if filtered)
+        studied = get_studied_paper_ids(papers)
+
         # 1. Paper deep-dives — intro + key ideas woven into narrative
         for pid, p in papers.items():
             if pid not in all_cards:
                 continue
-            if filter_ids is not None and pid not in filter_ids:
-                continue
+            if filter_ids is not None:
+                if pid not in filter_ids:
+                    continue
+            else:
+                if pid not in studied:
+                    continue
 
             title = p.get('title', 'Unknown')
             summary = p.get('summary') or p.get('abstract', '')
