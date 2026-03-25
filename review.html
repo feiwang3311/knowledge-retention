@@ -2003,15 +2003,10 @@ async function loadRadio() {
   for (const seg of segments) {
     if (seg.type === 'summary') {
       const title = seg.label;
-      if (seen.has(title)) continue; // Skip duplicate papers
+      if (seen.has(title)) continue;
       seen.add(title);
       currentGroup = { title, segments: [seg] };
       paperGroups.push(currentGroup);
-    } else if (seg.type === 'discovery') {
-      const title = seg.label;
-      if (seen.has(title)) continue;
-      seen.add(title);
-      paperGroups.push({ title, segments: [seg] });
     } else if (currentGroup) {
       currentGroup.segments.push(seg);
     }

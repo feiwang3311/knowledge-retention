@@ -870,27 +870,6 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                     "pause_after": 3,
                 })
 
-        # 2. New discoveries — only when not filtering specific papers
-        if filter_ids is not None:
-            json_response(self, {
-                "segments": segments,
-                "total": len(segments),
-                "estimated_minutes": round(len(segments) * 0.4, 1),
-            })
-            return
-
-        discovered = [(pid, p) for pid, p in papers.items() if p.get("status") == "discovered"]
-        discovered.sort(key=lambda x: x[1].get("relevance_score", 0), reverse=True)
-        for pid, p in discovered[:5]:
-            abstract = p.get("abstract", "")
-            if abstract:
-                segments.append({
-                    "type": "discovery",
-                    "label": f"New — {p.get('title', 'Unknown')[:50]}",
-                    "text": f"Here's a recently discovered paper: {p.get('title', 'Unknown')}. {abstract[:400]}",
-                    "pause_after": 3,
-                })
-
         json_response(self, {
             "segments": segments,
             "total": len(segments),
