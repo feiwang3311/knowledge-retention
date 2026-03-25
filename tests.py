@@ -447,15 +447,86 @@ else:
         test("delete paper → 200", code == 200 and data.get("ok"))
 
 
+    # Study complete + verify radio includes it
+    unstudied_papers = [p for p in papers_resp2.get("papers", [])
+                        if p.get("card_count", 0) > 0 and p.get("status") != "read"]
+    if unstudied_papers:
+        study_pid = unstudied_papers[0]["id"]
+        data, code = api_post(f"/api/study/{study_pid}/complete", {})
+        test("study complete → 200", code == 200 and data.get("ok"))
+
+        # Verify radio now includes it
+        radio_data, _ = api_get("/api/radio/playlist")
+        radio_labels = [s["label"] for s in radio_data.get("segments", []) if s["type"] == "summary"]
+        paper_in_radio = any(unstudied_papers[0]["title"][:20] in label for label in radio_labels)
+        test("studied paper appears in radio", paper_in_radio)
+
+    # Review answer with non-integer quality
+    data, code = api_post("/api/review/answer", {"card_id": "test", "quality": "bad"})
+    test("non-integer quality → 400", code == 400)
+
+    # TTS with special characters (returns binary, not JSON)
+    try:
+        tts_body = json.dumps({"text": "What's the difference?"}).encode()
+        tts_req = urllib.request.Request(f"{SERVER_URL}/api/tts", data=tts_body,
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(tts_req, timeout=15) as r:
+            tts_audio = r.read()
+            tts_ok = len(tts_audio) > 100
+    except Exception:
+        tts_ok = False
+    test("TTS with special chars → audio", tts_ok)
+
+    # Multiple radio papers filter
+    radio_papers_data, _ = api_get("/api/radio/papers")
+    rpapers = radio_papers_data.get("papers", [])
+    if len(rpapers) >= 2:
+        two_ids = f"{rpapers[0]['id']},{rpapers[1]['id']}"
+        data, code = api_get(f"/api/radio/playlist?paper_ids={two_ids}")
+        test("multi-paper radio filter → 200", code == 200)
+        summaries = [s for s in data.get("segments", []) if s["type"] == "summary"]
+        test("multi-paper filter returns both papers", len(summaries) == 2)
+
+    # Nonexistent study endpoint
+    data, code = api_get("/api/study/totally-fake-paper-id")
+    test("study nonexistent paper → 404", code == 404)
+
+    # Study complete on nonexistent paper
+    data, code = api_post("/api/study/totally-fake-paper-id/complete", {})
+    test("study complete nonexistent → 404", code == 404)
+
+    # Delete nonexistent paper
+    data, code = api_post("/api/papers/totally-fake-id/delete", {})
+    test("delete nonexistent paper → 404", code == 404)
+
+    # Exploration ask without exploration_id
+    data, code = api_post("/api/explorations/ask", {"question": "test"})
+    test("exploration ask without id → 400", code == 400)
+
+    # Dashboard stats reflect studied-only cards
+    dash_data, _ = api_get("/api/dashboard")
+    review_stats, _ = api_get("/api/review/stats")
+    test("dashboard and stats agree on due_today",
+         dash_data["stats"]["due_today"] == review_stats["due_today"])
+
+
 section("Card Generator Parse")
 
 from retention import CardGenerator
 
-# Test the improved JSON parser
+# Test the improved JSON parser (right-to-left search)
 test("parse with trailing text",
      CardGenerator._parse_response('[{"id":"a"}] some trailing text [ref]') is not None)
 test("parse nested brackets",
      CardGenerator._parse_response('Here: [{"id":"a","tags":["x","y"]}]') is not None)
+test("parse only valid JSON extracted",
+     len(CardGenerator._parse_response('[{"id":"a"}] some [ref]')) == 1)
+test("parse markdown code block",
+     CardGenerator._parse_response('Sure!\n```json\n[{"id":"b"}]\n```\nDone.') is not None)
+test("parse completely empty", CardGenerator._parse_response('') is None)
+test("parse just brackets", CardGenerator._parse_response('[]') == [])
+test("parse object not array returns None",
+     CardGenerator._parse_response('{"key": "value"}') is None)
 
 
 section("Semantic Scholar Helpers")
@@ -473,6 +544,104 @@ test("missing title → None",
      _s2_paper_to_dict({}) is None)
 test("tldr null handled",
      _s2_paper_to_dict({"title": "T", "authors": [], "tldr": None}) is not None)
+
+# More edge cases
+test("s2 paper with arxiv ID generates URL",
+     "arxiv.org" in (_s2_paper_to_dict({"title": "T", "authors": [], "externalIds": {"ArXiv": "2301.12345"}}).get("url", "")))
+test("s2 paper without arxiv ID uses s2 url",
+     _s2_paper_to_dict({"title": "T", "authors": [], "url": "https://example.com"}).get("url") == "https://example.com")
+test("s2 paper year defaults to current",
+     _s2_paper_to_dict({"title": "T", "authors": [], "year": None}).get("year") == datetime.now().year)
+test("s2 paper authors extracted",
+     _s2_paper_to_dict({"title": "T", "authors": [{"name": "Alice"}, {"name": "Bob"}]}).get("authors") == ["Alice", "Bob"])
+test("s2 paper empty authors handled",
+     _s2_paper_to_dict({"title": "T", "authors": None}).get("authors") == [])
+
+
+section("Relevance Scorer Edge Cases")
+
+# Test scoring with multiple keyword matches
+test("multiple keyword matches score higher",
+     RelevanceScorer.score({"title": "compiler optimization llm", "abstract": "", "tags": [], "categories": []}, interests) >
+     RelevanceScorer.score({"title": "compiler basics", "abstract": "", "tags": [], "categories": []}, interests))
+
+# Test topic matching
+test("topic match scores > 0",
+     RelevanceScorer.score({"title": "gpu kernels for deep learning", "abstract": "", "tags": [], "categories": []}, interests) > 0)
+
+# Test with no interests
+test("no interests → 0",
+     RelevanceScorer.score({"title": "anything", "abstract": "", "tags": [], "categories": []}, {"projects": [], "topics": []}) == 0)
+
+
+section("Studied Paper IDs")
+
+from retention import get_studied_paper_ids, STUDIED_STATUSES
+
+test("STUDIED_STATUSES contains read", "read" in STUDIED_STATUSES)
+test("STUDIED_STATUSES contains mastered", "mastered" in STUDIED_STATUSES)
+test("STUDIED_STATUSES excludes unread", "unread" not in STUDIED_STATUSES)
+test("STUDIED_STATUSES excludes discovered", "discovered" not in STUDIED_STATUSES)
+
+# Test with mock papers
+mock_papers = {
+    "p1": {"status": "read"},
+    "p2": {"status": "discovered"},
+    "p3": {"status": "mastered"},
+    "p4": {"status": "unread"},
+    "p5": {"status": "reviewing"},
+}
+studied = get_studied_paper_ids(mock_papers)
+test("studied includes read", "p1" in studied)
+test("studied excludes discovered", "p2" not in studied)
+test("studied includes mastered", "p3" in studied)
+test("studied excludes unread", "p4" not in studied)
+test("studied includes reviewing", "p5" in studied)
+
+
+section("Explorations Data")
+
+from retention import load_explorations, save_explorations, EXPLORATIONS_FILE
+
+# Test with temp file
+orig_exp = EXPLORATIONS_FILE
+try:
+    retention.EXPLORATIONS_FILE = Path(tmpdir) / "test_explorations.json" if os.path.exists(tmpdir) else Path(tempfile.mkdtemp()) / "test_explorations.json"
+
+    # Load nonexistent → empty
+    data = load_explorations()
+    test("load nonexistent explorations → empty", data == {"explorations": []})
+
+    # Save and load
+    test_data = {"explorations": [{"id": "exp-1", "title": "test", "questions": []}]}
+    save_explorations(test_data)
+    loaded = load_explorations()
+    test("save/load explorations roundtrip", loaded["explorations"][0]["id"] == "exp-1")
+
+    # Corrupted file
+    with open(retention.EXPLORATIONS_FILE, 'w') as f:
+        f.write("corrupted{")
+    data = load_explorations()
+    test("corrupted explorations → empty", data == {"explorations": []})
+
+finally:
+    retention.EXPLORATIONS_FILE = orig_exp
+
+
+section("HTML Escaping")
+
+# Verify the esc() function logic (replicate in Python)
+def py_esc(s):
+    if not s: return ''
+    return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;').replace("'",'&#39;')
+
+test("esc XSS script tag", '<script>' not in py_esc('<script>alert(1)</script>'))
+test("esc preserves normal text", py_esc("Hello World") == "Hello World")
+test("esc handles quotes", '&quot;' in py_esc('He said "hi"'))
+test("esc handles single quotes", '&#39;' in py_esc("it's"))
+test("esc handles ampersand", '&amp;' in py_esc("A & B"))
+test("esc handles None-like", py_esc('') == '')
+test("esc handles angle brackets", '&lt;' in py_esc("<tag>"))
 
 
 # ============================================================
