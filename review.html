@@ -940,9 +940,8 @@ header h1 { font-size: 20px; font-weight: 600; }
     <div class="tabs">
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="review">Review</button>
-      <button class="tab" data-tab="radio">Radio</button>
       <button class="tab" data-tab="explore">Explore</button>
-      <button class="tab" data-tab="papers">Papers</button>
+      <button class="tab" data-tab="radio">Radio</button>
     </div>
   </header>
 
@@ -986,28 +985,6 @@ header h1 { font-size: 20px; font-weight: 600; }
   </div>
 
   <!-- Papers -->
-  <div id="papers" class="tab-content">
-    <div class="filter-bar">
-      <select id="status-filter" onchange="renderPapers()">
-        <option value="">All statuses</option>
-        <option value="discovered">Discovered</option>
-        <option value="queued">Queued</option>
-        <option value="unread">Unread</option>
-        <option value="reading">Reading</option>
-        <option value="read">Read (Studied)</option>
-        <option value="reviewing">Reviewing</option>
-        <option value="mastered">Mastered</option>
-      </select>
-      <select id="group-by" onchange="renderPapers()">
-        <option value="none">No grouping</option>
-        <option value="status">Group by status</option>
-        <option value="category">Group by category</option>
-        <option value="source">Group by source</option>
-      </select>
-      <input type="text" id="search-input" placeholder="Search papers..." oninput="renderPapers()">
-    </div>
-    <div id="paper-list" class="paper-list"></div>
-  </div>
 </div>
 
 <script>
@@ -1113,7 +1090,6 @@ document.querySelectorAll('.tab').forEach(tab => {
 
     // Load data on tab switch
     if (tab.dataset.tab === 'dashboard') loadDashboard();
-    if (tab.dataset.tab === 'papers') loadPapers();
     if (tab.dataset.tab === 'review') showReviewStart();
     if (tab.dataset.tab === 'explore') loadExplore();
     if (tab.dataset.tab === 'radio' && !radioState.playlist) loadRadio();
@@ -1444,18 +1420,14 @@ function showSessionSummary() {
 
 // ---- Papers ----
 
-async function loadPapers() {
-  const el = document.getElementById('paper-list');
-  el.innerHTML = '<div class="loading">Loading...</div>';
-  papersData = await api('/api/papers');
-  renderPapers();
-}
-
 function renderPapers() {
   if (!papersData) return;
+  const statusEl = document.getElementById('status-filter');
+  const groupEl = document.getElementById('group-by');
+  if (!statusEl || !groupEl) return;
 
-  const statusFilter = document.getElementById('status-filter').value;
-  const groupBy = document.getElementById('group-by').value;
+  const statusFilter = statusEl.value;
+  const groupBy = groupEl.value;
   const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
   let papers = papersData.papers;
@@ -1524,7 +1496,7 @@ function renderPaperItem(p) {
           ${(p.categories || []).map(c => `<span class="tag">${c}</span>`).join('')}
         </div>
         <div class="paper-actions">
-          ${!isStudied ? `<button class="btn primary" onclick="startStudy('${p.id}'); document.querySelectorAll('.tab')[3].click();">Study</button>` : ''}
+          ${!isStudied ? `<button class="btn primary" onclick="startStudy('${p.id}')">Study</button>` : ''}
           <select class="status-select" onchange="updatePaperStatus('${p.id}', this.value)">
             ${['discovered','queued','unread','reading','read','reviewing','mastered'].map(s =>
               `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`
@@ -1610,24 +1582,12 @@ async function loadExplore() {
   ]);
 
   explorationsData = expResp.explorations || [];
+  papersData = papersResp;
 
-  // Get uncategorized papers (discovered, not linked to any exploration)
-  const allExpPaperIds = new Set();
-  explorationsData.forEach(exp => {
-    exp.questions.forEach(q => {
-      (q.papers_used || []).forEach(id => allExpPaperIds.add(id));
-      (q.papers_discovered || []).forEach(d => allExpPaperIds.add(d.id));
-    });
-  });
-
-  const uncategorized = (papersResp.papers || [])
-    .filter(p => ['discovered', 'queued', 'unread'].includes(p.status) && !allExpPaperIds.has(p.id))
-    .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0));
-
-  renderExploreContent(uncategorized);
+  renderExploreContent();
 }
 
-function renderExploreContent(uncategorized) {
+function renderExploreContent() {
   const el = document.getElementById('explore-content');
 
   let html = '';
@@ -1639,30 +1599,48 @@ function renderExploreContent(uncategorized) {
     html += '<div class="empty-state" style="padding: 24px;">Ask a question to start exploring. Try: "How is LLaMA different from DeepSeek and Qwen?"</div>';
   }
 
-  // Uncategorized papers
-  if (uncategorized.length > 0) {
-    html += `
-      <div class="uncategorized-section">
-        <div class="uncategorized-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? '' : 'none'">
-          Uncategorized Papers (${uncategorized.length}) ▾
-        </div>
-        <div>
-          ${uncategorized.slice(0, 20).map(p => `
-            <div class="discover-card">
-              <div class="title">${p.title}</div>
-              <div class="meta">${p.year || '?'} ${p.citation_count ? '· ' + p.citation_count + ' cites' : ''}</div>
-              <div class="discover-actions" style="margin-top: 8px;">
-                <button class="btn" onclick="startStudy('${p.id}')">Study</button>
-                <button class="vote-btn bad" onclick="removePaper('${p.id}')" title="Remove">x</button>
-              </div>
-            </div>
-          `).join('')}
-        </div>
+  // Library section (replaces Papers tab)
+  const totalPapers = papersData ? papersData.papers.length : '...';
+  html += `
+    <div class="uncategorized-section">
+      <div class="uncategorized-header" onclick="toggleLibrary()">
+        Library (${totalPapers} papers) ▾
       </div>
-    `;
-  }
+      <div id="library-section" style="display: none;">
+        <div class="filter-bar">
+          <select id="status-filter" onchange="renderPapers()">
+            <option value="">All statuses</option>
+            <option value="discovered">Discovered</option>
+            <option value="queued">Queued</option>
+            <option value="unread">Unread</option>
+            <option value="reading">Reading</option>
+            <option value="read">Read (Studied)</option>
+            <option value="reviewing">Reviewing</option>
+            <option value="mastered">Mastered</option>
+          </select>
+          <select id="group-by" onchange="renderPapers()">
+            <option value="category">Group by category</option>
+            <option value="status">Group by status</option>
+            <option value="none">No grouping</option>
+            <option value="source">Group by source</option>
+          </select>
+          <input type="text" id="search-input" placeholder="Search papers..." oninput="renderPapers()">
+        </div>
+        <div id="paper-list" class="paper-list"></div>
+      </div>
+    </div>
+  `;
 
   el.innerHTML = html;
+  if (papersData) renderPapers();
+}
+
+function toggleLibrary() {
+  const section = document.getElementById('library-section');
+  if (!section) return;
+  const isHidden = section.style.display === 'none';
+  section.style.display = isHidden ? '' : 'none';
+  if (isHidden && papersData) renderPapers();
 }
 
 function renderExploration(exp) {
