@@ -26,7 +26,7 @@ from papers_cli import get_paper_id, save_yaml, PAPERS_DIR, ensure_dirs
 
 LOG_FILE = Path(__file__).parent / "daily.log"
 AUTO_GENERATE_THRESHOLD = 0.3  # Generate cards for papers with relevance >= this
-DAILY_CARD_LIMIT = 3  # Max papers to generate cards for per day (pacing)
+DAILY_CARD_LIMIT = 5  # Max papers to generate cards for per day
 
 
 def log(msg):
