@@ -334,8 +334,8 @@ def cmd_add_url(args):
             print("Error: Could not fetch page content.")
             return
 
-        title = scraped['title']
-        description = scraped['description'] or scraped['text'][:300]
+        title = scraped.get('title', 'Unknown')
+        description = scraped.get('description') or (scraped.get('text') or '')[:300]
 
         print(f"\n=== Found Content ===")
         print(f"Title: {title}")
@@ -847,18 +847,20 @@ def cmd_generate_cards(args):
 
 def cmd_review(_args):
     """Interactive CLI review session."""
-    from retention import SM2, load_review_state, save_review_state, load_all_cards, load_all_papers
+    from retention import (SM2, load_review_state, save_review_state,
+                           load_all_cards, load_all_papers, get_studied_paper_ids)
 
     state = load_review_state()
-    due_ids = SM2.get_due_cards(state)
+    papers = load_all_papers()
+    studied = get_studied_paper_ids(papers)
+    due_ids = SM2.get_due_cards(state, studied_paper_ids=studied)
 
     if not due_ids:
-        stats = SM2.get_stats(state)
+        stats = SM2.get_stats(state, studied)
         print(f"No cards due today! (Total: {stats['total']}, Mastered: {stats['mastered']})")
         return
 
     all_cards = load_all_cards()
-    papers = load_all_papers()
 
     # Build card list with full data
     cards = []

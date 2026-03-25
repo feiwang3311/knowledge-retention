@@ -1515,8 +1515,8 @@ function renderPaperItem(p) {
           ${(p.categories || []).map(c => `<span class="tag">${esc(c)}</span>`).join('')}
         </div>
         <div class="paper-actions">
-          ${!isStudied ? `<button class="btn primary" onclick="startStudy('${p.id}')">Study</button>` : ''}
-          <select class="status-select" onchange="updatePaperStatus('${p.id}', this.value)">
+          ${!isStudied ? `<button class="btn primary" onclick="startStudy('${esc(p.id)}')">Study</button>` : ''}
+          <select class="status-select" onchange="updatePaperStatus('${esc(p.id)}', this.value)">
             ${['discovered','queued','unread','reading','read','reviewing','mastered'].map(s =>
               `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`
             ).join('')}
@@ -1524,8 +1524,8 @@ function renderPaperItem(p) {
           <button class="btn" onclick="generateCards('${esc(p.id)}', this)">
             ${p.card_count > 0 ? 'Regen Cards' : 'Gen Cards'}
           </button>
-          ${p.card_count > 0 ? `<button class="btn" onclick="listenToPaper('${p.id}')" title="Listen in Radio">&#9654; Listen</button>` : ''}
-          <button class="vote-btn bad" onclick="if(confirm('Delete this paper?')) removePaper('${p.id}')" style="padding: 4px 8px;">x</button>
+          ${p.card_count > 0 ? `<button class="btn" onclick="listenToPaper('${esc(p.id)}')" title="Listen in Radio">&#9654; Listen</button>` : ''}
+          <button class="vote-btn bad" onclick="if(confirm('Delete this paper?')) removePaper('${esc(p.id)}')" style="padding: 4px 8px;">x</button>
         </div>
       </div>
     </div>
@@ -1842,8 +1842,8 @@ function renderStudyView(el, study) {
         <h2>${esc(p.title)}</h2>
         <div class="authors">${esc((p.authors || []).join(', '))} · ${p.year || '?'}
           ${p.citation_count ? ` · ${p.citation_count} citations` : ''}</div>
-        ${p.url ? `<a href="${p.url}" target="_blank" style="color: var(--accent); font-size: 13px;">Open paper &rarr;</a>` : ''}
-        <div class="abstract" style="margin-top: 12px;">${esc(p.abstract || p.summary || 'No abstract available.'}</div>
+        ${p.url ? `<a href="${esc(p.url)}" target="_blank" style="color: var(--accent); font-size: 13px;">Open paper &rarr;</a>` : ''}
+        <div class="abstract" style="margin-top: 12px;">${esc(p.abstract || p.summary || 'No abstract available.')}</div>
 
         <div class="audio-controls" style="margin-top: 12px;">
           <button class="audio-btn" onclick="tts.toggle(document.querySelector('.study-header .abstract').textContent)">&#9654; Listen to summary</button>

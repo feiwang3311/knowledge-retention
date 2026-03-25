@@ -41,9 +41,12 @@ def log(msg):
 def notify(title, message):
     """Send macOS notification."""
     try:
+        # Escape quotes for AppleScript string
+        safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
+        safe_msg = message.replace('\\', '\\\\').replace('"', '\\"')
         subprocess.run([
             "osascript", "-e",
-            f'display notification "{message}" with title "{title}"'
+            f'display notification "{safe_msg}" with title "{safe_title}"'
         ], timeout=10)
     except Exception as e:
         log(f"Notification failed: {e}")
@@ -215,9 +218,11 @@ def main():
     cards_generated = auto_generate_cards()
     log(f"Generated cards for {cards_generated} papers")
 
-    # 3. Get review stats
+    # 3. Get review stats (only count studied papers)
     state = load_review_state()
-    stats = SM2.get_stats(state)
+    from retention import get_studied_paper_ids
+    studied = get_studied_paper_ids()
+    stats = SM2.get_stats(state, studied)
     due = stats['due_today']
     total = stats['total']
     mastered = stats['mastered']

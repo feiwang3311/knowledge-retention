@@ -110,6 +110,18 @@ test("stats has required fields",
      all(k in stats for k in ["total", "due_today", "mastered", "new_cards"]))
 test("stats total correct", stats["total"] == 2)
 
+# Test studied_paper_ids filtering
+state_filtered = {"cards": {
+    "c1": {**SM2.initial_state("c1", "paper-studied"), "next_review": "2020-01-01"},
+    "c2": {**SM2.initial_state("c2", "paper-unstudied"), "next_review": "2020-01-01"},
+}}
+studied_set = {"paper-studied"}
+due_filtered = SM2.get_due_cards(state_filtered, studied_paper_ids=studied_set)
+test("studied filter includes studied paper cards", "c1" in due_filtered)
+test("studied filter excludes unstudied paper cards", "c2" not in due_filtered)
+stats_filtered = SM2.get_stats(state_filtered, studied_set)
+test("stats filtered counts only studied", stats_filtered["due_today"] == 1)
+
 
 section("Card Generator")
 
