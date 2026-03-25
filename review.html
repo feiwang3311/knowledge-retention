@@ -1997,11 +1997,39 @@ async function loadRadio() {
   }
 
   const data = await api(url);
-  radioState.playlist = data.segments || [];
-  radioState.current = -1;
-  radioState.playing = false;
+  const segments = data.segments || [];
 
-  if (radioState.playlist.length === 0) {
+  // Group segments by paper (using the summary segment's label as paper title)
+  const paperGroups = [];
+  const seen = new Set();
+  let currentGroup = null;
+
+  for (const seg of segments) {
+    if (seg.type === 'summary') {
+      const title = seg.label;
+      if (seen.has(title)) continue; // Skip duplicate papers
+      seen.add(title);
+      currentGroup = { title, segments: [seg] };
+      paperGroups.push(currentGroup);
+    } else if (seg.type === 'discovery') {
+      const title = seg.label;
+      if (seen.has(title)) continue;
+      seen.add(title);
+      paperGroups.push({ title, segments: [seg] });
+    } else if (currentGroup) {
+      currentGroup.segments.push(seg);
+    }
+  }
+
+  radioState.papers = paperGroups;
+  radioState.currentPaper = -1;
+  radioState.currentSegment = -1;
+  radioState.playing = false;
+  // Flatten for playback
+  radioState.playlist = paperGroups.flatMap(g => g.segments);
+  radioState.current = -1;
+
+  if (paperGroups.length === 0) {
     area.innerHTML = '<div class="empty-state">No content for these papers. Select papers with cards or generate cards first.</div>';
     return;
   }
@@ -2014,6 +2042,16 @@ function renderRadio() {
   const s = radioState;
   const segment = s.current >= 0 ? s.playlist[s.current] : null;
 
+  // Find which paper is currently playing
+  let currentPaperIdx = -1;
+  if (s.current >= 0) {
+    let segCount = 0;
+    for (let i = 0; i < s.papers.length; i++) {
+      segCount += s.papers[i].segments.length;
+      if (s.current < segCount) { currentPaperIdx = i; break; }
+    }
+  }
+
   area.innerHTML = `
     <div class="radio-now-playing">
       ${segment ? `
@@ -2022,21 +2060,21 @@ function renderRadio() {
         <div class="segment-text">${segment.text}</div>
       ` : `
         <div class="segment-label">Ready to play</div>
-        <p style="color: var(--text-dim);">${s.playlist.length} segments — review cards, summaries, discoveries</p>
+        <p style="color: var(--text-dim);">${s.papers.length} papers queued</p>
       `}
     </div>
 
     <div class="radio-controls">
-      <button class="radio-btn" onclick="radioSkip(-1)" title="Previous">&#9664;&#9664;</button>
+      <button class="radio-btn" onclick="radioSkipPaper(-1)" title="Previous paper">&#9664;&#9664;</button>
       <button class="radio-btn play" onclick="radioToggle()" title="${s.playing ? 'Pause' : 'Play'}">
         ${s.playing ? '&#9646;&#9646;' : '&#9654;'}
       </button>
-      <button class="radio-btn" onclick="radioSkip(1)" title="Next">&#9654;&#9654;</button>
+      <button class="radio-btn" onclick="radioSkipPaper(1)" title="Next paper">&#9654;&#9654;</button>
     </div>
 
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <div class="radio-progress">
-        ${s.current >= 0 ? `${s.current + 1} / ${s.playlist.length}` : `${s.playlist.length} segments`}
+        ${currentPaperIdx >= 0 ? `Paper ${currentPaperIdx + 1} of ${s.papers.length}` : `${s.papers.length} papers`}
       </div>
       <div class="speed-control">
         Speed:
@@ -2052,10 +2090,14 @@ function renderRadio() {
     <div class="progress-bar"><div class="fill" style="width: ${s.current >= 0 ? ((s.current + 1) / s.playlist.length * 100) : 0}%"></div></div>
 
     <div class="radio-playlist" style="max-height: 300px; overflow-y: auto;">
-      ${s.playlist.map((seg, i) => `
-        <div class="radio-playlist-item ${i === s.current ? 'active' : ''}" onclick="radioJump(${i})">
-          <span>${seg.label}</span>
-          <span class="type-badge ${seg.type}">${seg.type}</span>
+      ${s.papers.map((paper, i) => `
+        <div class="radio-playlist-item ${i === currentPaperIdx ? 'active' : ''}" style="display: flex; align-items: center; gap: 8px;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:0;line-height:1;" onclick="event.stopPropagation();radioMovePaper(${i},-1)" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
+            <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:0;line-height:1;" onclick="event.stopPropagation();radioMovePaper(${i},1)" ${i === s.papers.length - 1 ? 'disabled' : ''}>&#9660;</button>
+          </div>
+          <span style="flex:1;cursor:pointer;" onclick="radioJumpToPaper(${i})">${paper.title}</span>
+          <span style="font-size:11px;color:var(--text-dim);">${paper.segments.length} parts</span>
         </div>
       `).join('')}
     </div>
@@ -2125,22 +2167,57 @@ async function radioPlayCurrent() {
   await radioPlayCurrent();
 }
 
-function radioSkip(direction) {
+function getPaperStartIndex(paperIdx) {
+  let idx = 0;
+  for (let i = 0; i < paperIdx && i < radioState.papers.length; i++) {
+    idx += radioState.papers[i].segments.length;
+  }
+  return idx;
+}
+
+function radioSkipPaper(direction) {
   const s = radioState;
   clearTimeout(s._pauseTimer);
   tts.stop();
-  s.current = Math.max(0, Math.min(s.playlist.length - 1, s.current + direction));
+
+  // Find current paper index
+  let currentPaper = 0;
+  let segCount = 0;
+  for (let i = 0; i < s.papers.length; i++) {
+    segCount += s.papers[i].segments.length;
+    if (s.current < segCount) { currentPaper = i; break; }
+  }
+
+  const targetPaper = Math.max(0, Math.min(s.papers.length - 1, currentPaper + direction));
+  s.current = getPaperStartIndex(targetPaper);
   renderRadio();
   if (s.playing) radioPlayCurrent();
 }
 
-function radioJump(index) {
+function radioJumpToPaper(paperIdx) {
   const s = radioState;
   clearTimeout(s._pauseTimer);
   tts.stop();
-  s.current = index;
+  s.current = getPaperStartIndex(paperIdx);
   renderRadio();
   if (s.playing) radioPlayCurrent();
+}
+
+function radioMovePaper(paperIdx, direction) {
+  const s = radioState;
+  const targetIdx = paperIdx + direction;
+  if (targetIdx < 0 || targetIdx >= s.papers.length) return;
+
+  // Swap papers
+  [s.papers[paperIdx], s.papers[targetIdx]] = [s.papers[targetIdx], s.papers[paperIdx]];
+
+  // Rebuild flat playlist
+  s.playlist = s.papers.flatMap(g => g.segments);
+  s.current = -1; // Reset playback position
+  s.playing = false;
+  tts.stop();
+  clearTimeout(s._pauseTimer);
+  renderRadio();
 }
 
 function radioSetSpeed(val) {
