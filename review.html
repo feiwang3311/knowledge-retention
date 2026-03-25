@@ -1069,6 +1069,13 @@ function prefetchAllTTS() {
   }
 }
 
+// ---- Utilities ----
+
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 // ---- API Calls ----
 
 async function api(path, opts = {}) {
@@ -1076,6 +1083,9 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
+  if (!res.ok && !res.headers.get('content-type')?.includes('json')) {
+    return { error: `HTTP ${res.status}` };
+  }
   return res.json();
 }
 
@@ -1362,6 +1372,10 @@ function toggleAutoRead(type, el) {
 }
 
 async function rateCard(quality) {
+  // Guard against double-click
+  const btns = document.getElementById('rating-btns');
+  if (btns) btns.querySelectorAll('button').forEach(b => b.disabled = true);
+
   tts.stop();
   const card = reviewSession.cards[reviewSession.current];
 
@@ -1484,21 +1498,21 @@ function renderPapers() {
 function renderPaperItem(p) {
   const isStudied = ['read', 'reviewing', 'mastered'].includes(p.status);
   return `
-    <div class="paper-item" id="paper-${p.id}">
+    <div class="paper-item" id="paper-${esc(p.id)}">
       <div class="paper-header">
-        <span class="paper-title" onclick="togglePaperDetails('${p.id}')">${p.title}</span>
+        <span class="paper-title" onclick="togglePaperDetails('${esc(p.id)}')">${esc(p.title)}</span>
         <div class="paper-meta">
           ${p.due_count > 0 ? `<span class="badge cards has-due">${p.due_count} due</span>` : ''}
           ${p.card_count > 0 ? `<span class="badge cards">${p.card_count} cards</span>` : ''}
-          <span class="badge status-${p.status}">${p.status}</span>
+          <span class="badge status-${esc(p.status)}">${esc(p.status)}</span>
         </div>
       </div>
-      <div class="paper-details" id="details-${p.id}">
-        <div class="paper-info">${(p.authors || []).join(', ')} · ${p.year || '?'}${p.citation_count ? ` · ${p.citation_count} cites` : ''}</div>
-        ${p.discovery_reason ? `<div style="font-size: 11px; color: var(--purple); margin: 4px 0;">${p.discovery_reason}</div>` : ''}
+      <div class="paper-details" id="details-${esc(p.id)}">
+        <div class="paper-info">${esc((p.authors || []).join(', '))} · ${p.year || '?'}${p.citation_count ? ` · ${p.citation_count} cites` : ''}</div>
+        ${p.discovery_reason ? `<div style="font-size: 11px; color: var(--purple); margin: 4px 0;">${esc(p.discovery_reason)}</div>` : ''}
         <div class="paper-tags">
-          ${(p.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
-          ${(p.categories || []).map(c => `<span class="tag">${c}</span>`).join('')}
+          ${(p.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
+          ${(p.categories || []).map(c => `<span class="tag">${esc(c)}</span>`).join('')}
         </div>
         <div class="paper-actions">
           ${!isStudied ? `<button class="btn primary" onclick="startStudy('${p.id}')">Study</button>` : ''}
@@ -1507,7 +1521,7 @@ function renderPaperItem(p) {
               `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`
             ).join('')}
           </select>
-          <button class="btn" onclick="generateCards('${p.id}')">
+          <button class="btn" onclick="generateCards('${esc(p.id)}', this)">
             ${p.card_count > 0 ? 'Regen Cards' : 'Gen Cards'}
           </button>
           ${p.card_count > 0 ? `<button class="btn" onclick="listenToPaper('${p.id}')" title="Listen in Radio">&#9654; Listen</button>` : ''}
@@ -1534,8 +1548,8 @@ async function updatePaperStatus(paperId, status) {
   if (paper) paper.status = status;
 }
 
-async function generateCards(paperId) {
-  const btn = event.target;
+async function generateCards(paperId, btn) {
+  if (!btn) return;
   btn.disabled = true;
   btn.textContent = 'Generating...';
 
@@ -1930,6 +1944,7 @@ const radioState = {
   playing: false,
   speed: 1.0,
   selectedPaperIds: null, // null = all, Set = specific papers
+  generation: 0, // incremented on each play to cancel stale chains
 };
 
 async function onRadioSourceChange() {
@@ -2110,19 +2125,22 @@ function renderRadio() {
 async function radioToggle() {
   if (radioState.playing) {
     radioState.playing = false;
+    radioState.generation++;
+    clearTimeout(radioState._pauseTimer);
     tts.stop();
     renderRadio();
   } else {
     radioState.playing = true;
+    radioState.generation++;
     if (radioState.current < 0) radioState.current = 0;
     renderRadio();
-    await radioPlayCurrent();
+    await radioPlayCurrent(radioState.generation);
   }
 }
 
-async function radioPlayCurrent() {
+async function radioPlayCurrent(gen) {
   const s = radioState;
-  if (!s.playing || s.current >= s.playlist.length) {
+  if (!s.playing || s.current >= s.playlist.length || gen !== s.generation) {
     s.playing = false;
     renderRadio();
     return;
@@ -2138,7 +2156,7 @@ async function radioPlayCurrent() {
 
   // Play current
   const url = await tts.fetchAudio(segment.text);
-  if (!url || !s.playing) return;
+  if (!url || !s.playing || gen !== s.generation) return;
 
   const audio = new Audio(url);
   audio.playbackRate = s.speed;
@@ -2162,7 +2180,7 @@ async function radioPlayCurrent() {
 
   tts.speaking = false;
 
-  if (!s.playing) return;
+  if (!s.playing || gen !== s.generation) return;
 
   // Pause between segments
   const pauseMs = (segment.pause_after || 2) * 1000;
@@ -2172,11 +2190,11 @@ async function radioPlayCurrent() {
     radioState._pauseTimer = timer;
   });
 
-  if (!s.playing) return;
+  if (!s.playing || gen !== s.generation) return;
 
   // Next segment
   s.current++;
-  await radioPlayCurrent();
+  await radioPlayCurrent(gen);
 }
 
 function getPaperStartIndex(paperIdx) {
@@ -2203,7 +2221,7 @@ function radioSkipPaper(direction) {
   const targetPaper = Math.max(0, Math.min(s.papers.length - 1, currentPaper + direction));
   s.current = getPaperStartIndex(targetPaper);
   renderRadio();
-  if (s.playing) radioPlayCurrent();
+  if (s.playing) { s.generation++; radioPlayCurrent(s.generation); }
 }
 
 function radioJumpToPaper(paperIdx) {
@@ -2212,7 +2230,7 @@ function radioJumpToPaper(paperIdx) {
   tts.stop();
   s.current = getPaperStartIndex(paperIdx);
   renderRadio();
-  if (s.playing) radioPlayCurrent();
+  if (s.playing) { s.generation++; radioPlayCurrent(s.generation); }
 }
 
 function radioMovePaper(paperIdx, direction) {

@@ -38,6 +38,7 @@ TTS_VOICE = "en-US-AriaNeural"  # Natural-sounding Microsoft neural voice
 
 # Locks for thread safety
 _review_state_lock = threading.Lock()
+_papers_lock = threading.Lock()
 _feedback_lock = threading.Lock()
 _topics_lock = threading.Lock()
 _explorations_lock = threading.Lock()
@@ -224,7 +225,9 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         # Due cards with paper context
         due_cards = []
         for card_id in due_ids:
-            card_state = state["cards"][card_id]
+            card_state = state["cards"].get(card_id)
+            if not card_state:
+                continue
             paper_id = card_state["paper_id"]
             paper_cards = all_cards.get(paper_id, {}).get("cards", [])
             card_data = next((c for c in paper_cards if c["id"] == card_id), None)
@@ -255,7 +258,9 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
         due_cards = []
         for card_id in due_ids:
-            card_state = state["cards"][card_id]
+            card_state = state["cards"].get(card_id)
+            if not card_state:
+                continue
             paper_id = card_state["paper_id"]
             paper_cards = all_cards.get(paper_id, {}).get("cards", [])
             card_data = next((c for c in paper_cards if c["id"] == card_id), None)
@@ -273,7 +278,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
     def api_review_stats(self):
         state = load_review_state()
-        studied = get_studied_paper_ids()
+        studied = get_studied_paper_ids(load_all_papers())
         stats = SM2.get_stats(state, studied)
         json_response(self, stats)
 
@@ -312,13 +317,13 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         all_cards = load_all_cards()
         state = load_review_state()
 
+        today = datetime.now().strftime("%Y-%m-%d")
         result = []
         for pid, p in sorted(papers.items(), key=lambda x: x[1].get('added_at', ''), reverse=True):
             card_count = len(all_cards.get(pid, {}).get("cards", []))
-            # Count due cards for this paper
             due_count = sum(
                 1 for cid, cs in state.get("cards", {}).items()
-                if cs["paper_id"] == pid and cs["next_review"] <= datetime.now().strftime("%Y-%m-%d")
+                if cs.get("paper_id") == pid and cs.get("next_review", "9999") <= today
             )
             result.append({
                 "id": pid,
@@ -379,7 +384,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             return
 
         save_cards(paper_id, cards_data)
-        count = register_cards(cards_data)
+        with _review_state_lock:
+            count = register_cards(cards_data)
 
         json_response(self, {
             "ok": True,
@@ -405,20 +411,20 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             json_response(self, {"error": "Paper not found"}, 404)
             return
 
-        with open(paper_path, 'r') as f:
-            paper = yaml.safe_load(f) or {}
+        with _papers_lock:
+            with open(paper_path, 'r') as f:
+                paper = yaml.safe_load(f) or {}
 
-        paper['status'] = new_status
-        # Add status history
-        if 'status_history' not in paper:
-            paper['status_history'] = []
-        paper['status_history'].append({
-            'status': new_status,
-            'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
+            paper['status'] = new_status
+            if 'status_history' not in paper:
+                paper['status_history'] = []
+            paper['status_history'].append({
+                'status': new_status,
+                'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
 
-        with open(paper_path, 'w') as f:
-            yaml.dump(paper, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            with open(paper_path, 'w') as f:
+                yaml.dump(paper, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         json_response(self, {"ok": True, "status": new_status})
 
@@ -543,7 +549,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             if paper_path.exists():
                 json_response(self, {"error": "Already exists", "id": paper_id}, 400)
                 return
-            desc = (scraped['description'] or scraped['text'][:300] or '').strip()
+            desc = (scraped.get('description') or (scraped.get('text') or '')[:300] or '').strip()
             paper_data = {
                 'title': title,
                 'authors': [],
@@ -604,17 +610,18 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
         # Update paper status to 'read'
         paper_path = BASE_DIR / "papers" / f"{paper_id}.yaml"
-        with open(paper_path, 'r') as f:
-            data = yaml.safe_load(f) or {}
-        data['status'] = 'read'
-        if 'status_history' not in data:
-            data['status_history'] = []
-        data['status_history'].append({
-            'status': 'read',
-            'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-        with open(paper_path, 'w') as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        with _papers_lock:
+            with open(paper_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+            data['status'] = 'read'
+            if 'status_history' not in data:
+                data['status_history'] = []
+            data['status_history'].append({
+                'status': 'read',
+                'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            with open(paper_path, 'w') as f:
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         # Ensure cards are registered in review state
         with _review_state_lock:
@@ -778,7 +785,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             })
 
         save_cards(paper_id, existing)
-        register_cards(existing)
+        with _review_state_lock:
+            register_cards(existing)
 
     def api_radio_papers(self):
         """Return all papers available for radio."""
