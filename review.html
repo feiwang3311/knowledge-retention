@@ -1432,8 +1432,8 @@ function renderPapers() {
 
   let papers = papersData.papers;
 
-  if (statusFilter) {
-    papers = papers.filter(p => p.status === statusFilter);
+  if (statusFilter === 'unread') {
+    papers = papers.filter(p => !['read', 'reviewing', 'mastered'].includes(p.status));
   }
 
   if (searchQuery) {
@@ -1609,14 +1609,8 @@ function renderExploreContent() {
       <div id="library-section" style="display: none;">
         <div class="filter-bar">
           <select id="status-filter" onchange="renderPapers()">
-            <option value="">All statuses</option>
-            <option value="discovered">Discovered</option>
-            <option value="queued">Queued</option>
-            <option value="unread">Unread</option>
-            <option value="reading">Reading</option>
-            <option value="read">Read (Studied)</option>
-            <option value="reviewing">Reviewing</option>
-            <option value="mastered">Mastered</option>
+            <option value="">All papers</option>
+            <option value="unread">Unread only</option>
           </select>
           <select id="group-by" onchange="renderPapers()">
             <option value="category">Group by category</option>
