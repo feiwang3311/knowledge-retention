@@ -67,6 +67,16 @@ def save_cards(paper_id, cards_data):
         json.dump(cards_data, f, indent=2, ensure_ascii=False)
 
 
+STUDIED_STATUSES = {'read', 'reviewing', 'mastered'}
+
+
+def get_studied_paper_ids(papers=None):
+    """Get set of paper IDs that have been studied (status is read/reviewing/mastered)."""
+    if papers is None:
+        papers = load_all_papers()
+    return {pid for pid, p in papers.items() if p.get('status') in STUDIED_STATUSES}
+
+
 def load_all_cards():
     """Load all card files from cards/ directory."""
     all_cards = {}
@@ -185,23 +195,30 @@ class SM2:
         return card_state
 
     @staticmethod
-    def get_due_cards(review_state, date=None):
-        """Get list of card IDs due for review on date (default: today)."""
+    def get_due_cards(review_state, date=None, studied_paper_ids=None):
+        """Get list of card IDs due for review on date (default: today).
+        If studied_paper_ids is provided, only include cards from those papers
+        (papers the user has actually studied)."""
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
         due = []
         for card_id, state in review_state.get("cards", {}).items():
             if state["next_review"] <= date:
+                if studied_paper_ids is not None:
+                    if state.get("paper_id") not in studied_paper_ids:
+                        continue
                 due.append(card_id)
         return due
 
     @staticmethod
-    def get_stats(review_state):
-        """Get review statistics."""
+    def get_stats(review_state, studied_paper_ids=None):
+        """Get review statistics. If studied_paper_ids given, only count those."""
         today = datetime.now().strftime("%Y-%m-%d")
         week_from_now = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
         cards = review_state.get("cards", {})
+        if studied_paper_ids is not None:
+            cards = {k: v for k, v in cards.items() if v.get("paper_id") in studied_paper_ids}
         total = len(cards)
         due_today = sum(1 for s in cards.values() if s["next_review"] <= today)
         upcoming_7d = sum(1 for s in cards.values()

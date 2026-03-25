@@ -690,6 +690,70 @@ header h1 { font-size: 20px; font-weight: 600; }
   color: var(--text-dim);
 }
 
+/* Study view */
+.study-view { max-width: 720px; margin: 0 auto; }
+
+.study-header {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+.study-header h2 { font-size: 20px; margin-bottom: 8px; }
+.study-header .authors { font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
+.study-header .abstract { font-size: 14px; line-height: 1.6; color: var(--text); }
+
+.study-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 12px;
+}
+
+.study-section h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.study-card {
+  padding: 14px;
+  background: var(--surface2);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.study-card .q { font-weight: 600; margin-bottom: 8px; }
+.study-card .a { color: var(--text-dim); line-height: 1.5; }
+
+.study-rating {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  justify-content: center;
+}
+
+.study-rating .rate-btn {
+  padding: 10px 20px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.study-rating .rate-btn:hover { border-color: var(--accent); }
+.study-rating .rate-btn.selected { background: var(--accent); border-color: var(--accent); color: white; }
+.study-rating .rate-btn.unrelated { border-color: var(--red); }
+.study-rating .rate-btn.unrelated:hover { background: var(--red); color: white; }
+
 /* Loading */
 .loading { text-align: center; padding: 32px; color: var(--text-dim); }
 
@@ -770,9 +834,8 @@ header h1 { font-size: 20px; font-weight: 600; }
 
   <!-- Discover -->
   <div id="discover" class="tab-content">
-    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">Add Paper or Topic</h3>
     <div class="discover-add-bar">
-      <input type="text" id="add-input" placeholder="Paste a URL, paper title, or describe a topic you want to learn about..." onkeydown="if(event.key==='Enter')addItem()">
+      <input type="text" id="add-input" placeholder="Paste a URL or describe a topic you want to learn about..." onkeydown="if(event.key==='Enter')addItem()">
       <select id="add-type">
         <option value="auto">Auto-detect</option>
         <option value="topic">Topic</option>
@@ -787,7 +850,7 @@ header h1 { font-size: 20px; font-weight: 600; }
 
     <div id="topics-section"></div>
 
-    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 12px;">New Discoveries — Rate These</h3>
+    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 12px;">Papers to Study</h3>
     <div id="discover-list"></div>
   </div>
 
@@ -811,9 +874,15 @@ header h1 { font-size: 20px; font-weight: 600; }
         <option value="queued">Queued</option>
         <option value="unread">Unread</option>
         <option value="reading">Reading</option>
-        <option value="read">Read</option>
+        <option value="read">Read (Studied)</option>
         <option value="reviewing">Reviewing</option>
         <option value="mastered">Mastered</option>
+      </select>
+      <select id="group-by" onchange="renderPapers()">
+        <option value="none">No grouping</option>
+        <option value="status">Group by status</option>
+        <option value="category">Group by category</option>
+        <option value="source">Group by source</option>
       </select>
       <input type="text" id="search-input" placeholder="Search papers..." oninput="renderPapers()">
     </div>
@@ -1266,6 +1335,7 @@ function renderPapers() {
   if (!papersData) return;
 
   const statusFilter = document.getElementById('status-filter').value;
+  const groupBy = document.getElementById('group-by').value;
   const searchQuery = document.getElementById('search-input').value.toLowerCase();
 
   let papers = papersData.papers;
@@ -1278,7 +1348,8 @@ function renderPapers() {
     papers = papers.filter(p =>
       p.title.toLowerCase().includes(searchQuery) ||
       (p.tags || []).some(t => t.includes(searchQuery)) ||
-      (p.categories || []).some(c => c.toLowerCase().includes(searchQuery))
+      (p.categories || []).some(c => c.toLowerCase().includes(searchQuery)) ||
+      (p.discovery_reason || '').toLowerCase().includes(searchQuery)
     );
   }
 
@@ -1289,35 +1360,64 @@ function renderPapers() {
     return;
   }
 
-  el.innerHTML = papers.map(p => `
+  // Grouping
+  if (groupBy !== 'none') {
+    const groups = {};
+    papers.forEach(p => {
+      let key;
+      if (groupBy === 'status') key = p.status || 'unknown';
+      else if (groupBy === 'category') key = (p.categories || [])[0] || 'Uncategorized';
+      else if (groupBy === 'source') key = p.source_type || 'unknown';
+      else key = 'all';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(p);
+    });
+
+    el.innerHTML = Object.entries(groups).sort().map(([group, gPapers]) => `
+      <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">
+        ${group} (${gPapers.length})
+      </h3>
+      ${gPapers.map(renderPaperItem).join('')}
+    `).join('');
+  } else {
+    el.innerHTML = papers.map(renderPaperItem).join('');
+  }
+}
+
+function renderPaperItem(p) {
+  const isStudied = ['read', 'reviewing', 'mastered'].includes(p.status);
+  return `
     <div class="paper-item" id="paper-${p.id}">
       <div class="paper-header">
         <span class="paper-title" onclick="togglePaperDetails('${p.id}')">${p.title}</span>
         <div class="paper-meta">
           ${p.due_count > 0 ? `<span class="badge cards has-due">${p.due_count} due</span>` : ''}
-          <span class="badge cards">${p.card_count} cards</span>
+          ${p.card_count > 0 ? `<span class="badge cards">${p.card_count} cards</span>` : ''}
           <span class="badge status-${p.status}">${p.status}</span>
         </div>
       </div>
       <div class="paper-details" id="details-${p.id}">
-        <div class="paper-info">${(p.authors || []).join(', ')} &middot; ${p.year || '?'}</div>
+        <div class="paper-info">${(p.authors || []).join(', ')} · ${p.year || '?'}${p.citation_count ? ` · ${p.citation_count} cites` : ''}</div>
+        ${p.discovery_reason ? `<div style="font-size: 11px; color: var(--purple); margin: 4px 0;">${p.discovery_reason}</div>` : ''}
         <div class="paper-tags">
           ${(p.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
           ${(p.categories || []).map(c => `<span class="tag">${c}</span>`).join('')}
         </div>
         <div class="paper-actions">
+          ${!isStudied ? `<button class="btn primary" onclick="startStudy('${p.id}'); document.querySelectorAll('.tab')[3].click();">Study</button>` : ''}
           <select class="status-select" onchange="updatePaperStatus('${p.id}', this.value)">
             ${['discovered','queued','unread','reading','read','reviewing','mastered'].map(s =>
               `<option value="${s}" ${s === p.status ? 'selected' : ''}>${s}</option>`
             ).join('')}
           </select>
-          <button class="btn ${p.card_count === 0 ? 'primary' : ''}" onclick="generateCards('${p.id}')" ${p.card_count > 0 ? '' : ''}>
-            ${p.card_count > 0 ? 'Regenerate Cards' : 'Generate Cards'}
+          <button class="btn" onclick="generateCards('${p.id}')">
+            ${p.card_count > 0 ? 'Regen Cards' : 'Gen Cards'}
           </button>
+          <button class="vote-btn bad" onclick="if(confirm('Delete this paper?')) removePaper('${p.id}')" style="padding: 4px 8px;">x</button>
         </div>
       </div>
     </div>
-  `).join('');
+  `;
 }
 
 function togglePaperDetails(id) {
@@ -1378,85 +1478,202 @@ document.addEventListener('keydown', (e) => {
 // ---- Discover Tab ----
 
 let discoverData = null;
+let studyingPaper = null;
 
 async function loadDiscover() {
-  // Load papers with status 'discovered' (newest first)
   const papersResp = await api('/api/papers');
-  const discovered = (papersResp.papers || [])
-    .filter(p => p.status === 'discovered')
-    .sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
-  discoverData = discovered;
+  // Show unread papers that haven't been studied yet (discovered, queued, unread)
+  const unread = (papersResp.papers || [])
+    .filter(p => ['discovered', 'queued', 'unread'].includes(p.status))
+    .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0));
+  discoverData = unread;
 
-  // Load topics
   const topicsResp = await api('/api/topics');
-  renderDiscoverList();
+  renderDiscoverMain();
   renderTopics(topicsResp.topics || []);
 }
 
-function renderDiscoverList() {
+function renderDiscoverMain() {
   const el = document.getElementById('discover-list');
   if (!discoverData || discoverData.length === 0) {
-    el.innerHTML = '<div class="empty-state">No new discoveries to review. Run <code>python3 papers_cli.py discover</code> to find papers.</div>';
+    el.innerHTML = '<div class="empty-state">No unread papers. Run <code>python3 papers_cli.py discover</code> to find more.</div>';
     return;
   }
 
-  el.innerHTML = discoverData.map(p => `
+  el.innerHTML = discoverData.map(p => {
+    const cites = p.citation_count ? `${p.citation_count} cites` : '';
+    return `
     <div class="discover-card" id="disc-${p.id}">
       <div class="title">${p.title}</div>
       <div class="meta">
         ${p.year || '?'} · ${(p.authors || []).slice(0, 3).join(', ')}${(p.authors||[]).length > 3 ? ' et al.' : ''}
-        ${p.card_count > 0 ? `· ${p.card_count} cards` : ''}
+        ${cites ? ` · ${cites}` : ''}
+        ${p.card_count > 0 ? ` · ${p.card_count} cards` : ''}
       </div>
-      <div class="reason">${p.discovery_reason || p.source_type || ''}</div>
+      ${p.discovery_reason ? `<div class="reason">${p.discovery_reason}</div>` : ''}
       <div class="discover-actions">
-        <button class="vote-btn good" onclick="votePaper('${p.id}', 'good', this)">&#x1F44D; Keep</button>
-        <button class="vote-btn bad" onclick="votePaper('${p.id}', 'bad', this)">&#x1F44E; Skip</button>
-        <select class="priority-select" onchange="setPaperPriority('${p.id}', this.value)">
-          <option value="relevant">Relevant</option>
+        <button class="btn primary" onclick="startStudy('${p.id}')">Study</button>
+        <select class="priority-select" onchange="ratePaper('${p.id}', this.value)">
+          <option value="" disabled selected>Rate...</option>
           <option value="important">Important</option>
+          <option value="relevant">Relevant</option>
           <option value="hobby">Hobby</option>
+          <option value="unrelated">Unrelated (remove)</option>
         </select>
-        <button class="btn" onclick="generateCards('${p.id}')" style="margin-left: auto;">Generate Cards</button>
+        <button class="vote-btn bad" onclick="removePaper('${p.id}')" title="Remove">x</button>
       </div>
     </div>
-  `).join('');
+  `}).join('');
 }
 
-async function votePaper(paperId, vote, btn) {
-  // Good = promote to 'queued', Bad = remove
-  if (vote === 'good') {
-    await api(`/api/papers/${paperId}/status`, {
-      method: 'POST',
-      body: JSON.stringify({ status: 'queued' }),
-    });
-    // Save feedback
-    await api('/api/feedback', {
-      method: 'POST',
-      body: JSON.stringify({ paper_id: paperId, vote: 'good' }),
-    });
-    toast('Paper queued for reading');
-  } else {
-    await api(`/api/papers/${paperId}/status`, {
-      method: 'POST',
-      body: JSON.stringify({ status: 'mastered' }),  // Skip = archive it
-    });
-    await api('/api/feedback', {
-      method: 'POST',
-      body: JSON.stringify({ paper_id: paperId, vote: 'bad' }),
-    });
-    toast('Paper skipped');
+async function ratePaper(paperId, rating) {
+  if (rating === 'unrelated') {
+    removePaper(paperId);
+    return;
   }
-  // Remove from list
+  await api('/api/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ paper_id: paperId, priority: rating }),
+  });
+  toast(`Rated as ${rating}`);
+}
+
+async function removePaper(paperId) {
+  await api(`/api/papers/${paperId}/delete`, { method: 'POST' });
   const card = document.getElementById(`disc-${paperId}`);
   if (card) card.style.display = 'none';
   discoverData = discoverData.filter(p => p.id !== paperId);
+  toast('Paper removed');
 }
 
-async function setPaperPriority(paperId, priority) {
-  await api('/api/feedback', {
+async function startStudy(paperId) {
+  const discoverContent = document.getElementById('discover-list');
+  const topicsSection = document.getElementById('topics-section');
+  const addBar = document.querySelector('.discover-add-bar');
+  const addLabel = document.querySelector('#discover h3');
+
+  // Hide discover list, show study view
+  discoverContent.innerHTML = '<div class="loading">Loading study session...</div>';
+  if (topicsSection) topicsSection.style.display = 'none';
+  if (addBar) addBar.style.display = 'none';
+  if (addLabel) addLabel.style.display = 'none';
+
+  // Generate cards if needed
+  const paperResp = await api(`/api/papers/${paperId}`);
+  if (!paperResp.cards || paperResp.cards.cards?.length === 0) {
+    discoverContent.innerHTML = '<div class="loading">Generating knowledge cards... (this takes ~30s)</div>';
+    await api(`/api/cards/generate/${paperId}`, { method: 'POST' });
+  }
+
+  // Load study session
+  const study = await api(`/api/study/${paperId}`);
+  studyingPaper = study;
+  renderStudyView(discoverContent, study);
+}
+
+function renderStudyView(el, study) {
+  const p = study.paper;
+  const cards = study.cards || [];
+  const connections = study.connections || [];
+
+  el.innerHTML = `
+    <div class="study-view">
+      <button class="btn" onclick="exitStudy()" style="margin-bottom: 12px;">&larr; Back to papers</button>
+
+      <div class="study-header">
+        <h2>${p.title}</h2>
+        <div class="authors">${(p.authors || []).join(', ')} · ${p.year || '?'}
+          ${p.citation_count ? ` · ${p.citation_count} citations` : ''}</div>
+        ${p.url ? `<a href="${p.url}" target="_blank" style="color: var(--accent); font-size: 13px;">Open paper &rarr;</a>` : ''}
+        <div class="abstract" style="margin-top: 12px;">${p.abstract || p.summary || 'No abstract available.'}</div>
+
+        <div class="audio-controls" style="margin-top: 12px;">
+          <button class="audio-btn" onclick="tts.toggle(document.querySelector('.study-header .abstract').textContent)">&#9654; Listen to summary</button>
+        </div>
+      </div>
+
+      <div class="study-rating">
+        <button class="rate-btn" onclick="ratePaperDuring('${p.id}', 'important', this)">Important</button>
+        <button class="rate-btn" onclick="ratePaperDuring('${p.id}', 'relevant', this)">Relevant</button>
+        <button class="rate-btn" onclick="ratePaperDuring('${p.id}', 'hobby', this)">Hobby</button>
+        <button class="rate-btn unrelated" onclick="ratePaperDuring('${p.id}', 'unrelated', this)">Unrelated</button>
+      </div>
+
+      ${cards.length > 0 ? `
+        <div class="study-section">
+          <h3>Key Concepts (${cards.length} cards)</h3>
+          ${cards.map((c, i) => `
+            <div class="study-card">
+              <div class="q">${i + 1}. ${c.question}</div>
+              <div class="a">${c.answer}</div>
+              <div class="audio-controls" style="margin-top: 6px;">
+                <button class="audio-btn" onclick="tts.toggle('${c.question.replace(/'/g, "\\'")} ... ${c.answer.replace(/'/g, "\\'")}')" style="font-size: 11px;">&#9654; Listen</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : '<div class="empty-state">No cards generated yet.</div>'}
+
+      ${connections.length > 0 ? `
+        <div class="study-section">
+          <h3>Related Papers</h3>
+          ${connections.map(c => `
+            <div style="padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;">
+              <span style="font-weight: 500;">${c.title}</span>
+              <div style="color: var(--text-dim); font-size: 11px;">${(c.reasons || []).join(', ')}</div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+
+      <div style="text-align: center; margin: 24px 0;">
+        <button class="start-btn" onclick="completeStudy('${p.id}')">
+          Mark as Studied — Add to Review Rotation
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function ratePaperDuring(paperId, rating, btn) {
+  if (rating === 'unrelated') {
+    if (confirm('Remove this paper from your library?')) {
+      removePaper(paperId);
+      exitStudy();
+    }
+    return;
+  }
+  // Highlight selected button
+  document.querySelectorAll('.study-rating .rate-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  api('/api/feedback', {
     method: 'POST',
-    body: JSON.stringify({ paper_id: paperId, priority }),
+    body: JSON.stringify({ paper_id: paperId, priority: rating }),
   });
+  toast(`Rated as ${rating}`);
+}
+
+async function completeStudy(paperId) {
+  const result = await api(`/api/study/${paperId}/complete`, { method: 'POST' });
+  if (result.ok) {
+    toast(`Paper studied! ${result.cards_activated} cards now in review rotation.`);
+    exitStudy();
+  } else {
+    toast(result.error || 'Failed', 'error');
+  }
+}
+
+function exitStudy() {
+  studyingPaper = null;
+  tts.stop();
+  // Re-show everything
+  const topicsSection = document.getElementById('topics-section');
+  const addBar = document.querySelector('.discover-add-bar');
+  const addLabel = document.querySelector('#discover h3');
+  if (topicsSection) topicsSection.style.display = '';
+  if (addBar) addBar.style.display = '';
+  if (addLabel) addLabel.style.display = '';
+  loadDiscover();
 }
 
 function renderTopics(topics) {
@@ -1491,7 +1708,6 @@ async function addItem() {
   input.disabled = true;
 
   if (type === 'topic' || (type === 'auto' && !text.startsWith('http'))) {
-    // Add as a topic
     await api('/api/topics', {
       method: 'POST',
       body: JSON.stringify({ description: text, priority }),
@@ -1500,7 +1716,6 @@ async function addItem() {
     input.value = '';
     loadDiscover();
   } else {
-    // Add as a paper URL
     const result = await api('/api/papers/add-url', {
       method: 'POST',
       body: JSON.stringify({ url: text, priority }),

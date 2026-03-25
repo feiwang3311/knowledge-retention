@@ -25,7 +25,7 @@ from retention import (
     SM2, CardGenerator, RelevanceScorer, ConnectionFinder,
     load_review_state, save_review_state, load_cards, save_cards,
     load_all_cards, load_paper, load_all_papers, load_interests,
-    register_cards, run_daily_check,
+    register_cards, run_daily_check, get_studied_paper_ids,
 )
 
 import yaml
@@ -100,6 +100,12 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_papers()
         elif path == "/api/topics":
             self.api_get_topics()
+        elif path.startswith("/api/study/"):
+            paper_id = sanitize_paper_id(path[len("/api/study/"):])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_study(paper_id)
         elif path.startswith("/api/papers/"):
             paper_id = sanitize_paper_id(path[len("/api/papers/"):])
             if not paper_id:
@@ -137,6 +143,18 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_add_topic()
         elif path == "/api/papers/add-url":
             self.api_add_paper_url()
+        elif path.startswith("/api/study/") and path.endswith("/complete"):
+            paper_id = sanitize_paper_id(path[len("/api/study/"):-len("/complete")])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_study_complete(paper_id)
+        elif path.startswith("/api/papers/") and path.endswith("/delete"):
+            paper_id = sanitize_paper_id(path[len("/api/papers/"):-len("/delete")])
+            if not paper_id:
+                json_response(self, {"error": "Invalid paper ID"}, 400)
+            else:
+                self.api_delete_paper(paper_id)
         elif path.startswith("/api/cards/generate/"):
             paper_id = sanitize_paper_id(path[len("/api/cards/generate/"):])
             if not paper_id:
@@ -178,10 +196,10 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
     def api_dashboard(self):
         state = load_review_state()
-        stats = SM2.get_stats(state)
-        due_ids = SM2.get_due_cards(state)
-
         papers = load_all_papers()
+        studied = get_studied_paper_ids(papers)
+        stats = SM2.get_stats(state, studied)
+        due_ids = SM2.get_due_cards(state, studied_paper_ids=studied)
         all_cards = load_all_cards()
 
         # Reading pipeline counts
@@ -217,8 +235,9 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
     def api_review_due(self):
         state = load_review_state()
-        due_ids = SM2.get_due_cards(state)
         papers = load_all_papers()
+        studied = get_studied_paper_ids(papers)
+        due_ids = SM2.get_due_cards(state, studied_paper_ids=studied)
         all_cards = load_all_cards()
 
         due_cards = []
@@ -241,7 +260,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
     def api_review_stats(self):
         state = load_review_state()
-        stats = SM2.get_stats(state)
+        studied = get_studied_paper_ids()
+        stats = SM2.get_stats(state, studied)
         json_response(self, stats)
 
     def api_review_answer(self):
@@ -527,6 +547,97 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         PAPERS_DIR.mkdir(exist_ok=True)
         save_yaml(paper_path, paper_data)
         json_response(self, {"ok": True, "id": paper_id, "title": paper_data.get('title', '')})
+
+    # ---- Study Flow ----
+
+    def api_study(self, paper_id):
+        """Get study session data for a paper: summary + all cards for learning."""
+        paper = load_paper(paper_id)
+        if not paper:
+            json_response(self, {"error": "Paper not found"}, 404)
+            return
+
+        cards_data = load_cards(paper_id)
+        cards = cards_data.get("cards", []) if cards_data else []
+        connections = ConnectionFinder.find_connections(paper_id)
+
+        # Build a study session
+        json_response(self, {
+            "paper": {
+                "id": paper.get("id"),
+                "title": paper.get("title"),
+                "authors": paper.get("authors", []),
+                "year": paper.get("year"),
+                "abstract": paper.get("abstract", ""),
+                "summary": paper.get("summary", ""),
+                "url": paper.get("url", ""),
+                "status": paper.get("status", "unread"),
+                "tags": paper.get("tags", []),
+                "categories": paper.get("categories", []),
+                "citation_count": paper.get("citation_count"),
+                "discovery_reason": paper.get("discovery_reason", ""),
+            },
+            "cards": cards,
+            "connections": connections,
+            "has_cards": len(cards) > 0,
+        })
+
+    def api_study_complete(self, paper_id):
+        """Mark a paper as studied. Cards now enter spaced repetition rotation."""
+        paper = load_paper(paper_id)
+        if not paper:
+            json_response(self, {"error": "Paper not found"}, 404)
+            return
+
+        # Update paper status to 'read'
+        paper_path = BASE_DIR / "papers" / f"{paper_id}.yaml"
+        with open(paper_path, 'r') as f:
+            data = yaml.safe_load(f) or {}
+        data['status'] = 'read'
+        if 'status_history' not in data:
+            data['status_history'] = []
+        data['status_history'].append({
+            'status': 'read',
+            'at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        with open(paper_path, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        # Ensure cards are registered in review state
+        cards_data = load_cards(paper_id)
+        if cards_data:
+            count = register_cards(cards_data)
+        else:
+            count = 0
+
+        json_response(self, {"ok": True, "cards_activated": count})
+
+    def api_delete_paper(self, paper_id):
+        """Delete a paper and its cards."""
+        paper_path = BASE_DIR / "papers" / f"{paper_id}.yaml"
+        if not paper_path.exists():
+            json_response(self, {"error": "Paper not found"}, 404)
+            return
+
+        # Delete paper YAML
+        paper_path.unlink()
+
+        # Delete cards if they exist
+        cards_path = BASE_DIR / "cards" / f"{paper_id}.json"
+        if cards_path.exists():
+            cards_path.unlink()
+
+        # Remove from review state
+        with _review_state_lock:
+            state = load_review_state()
+            to_remove = [cid for cid, cs in state.get("cards", {}).items()
+                         if cs.get("paper_id") == paper_id]
+            for cid in to_remove:
+                del state["cards"][cid]
+            if to_remove:
+                save_review_state(state)
+
+        json_response(self, {"ok": True, "removed_cards": len(to_remove)})
 
     def api_radio_playlist(self):
         """Generate a narrative playlist for passive audio learning.
