@@ -96,6 +96,62 @@ def auto_generate_cards():
     return generated
 
 
+def auto_categorize():
+    """Categorize uncategorized papers using LLM."""
+    import subprocess
+    papers = load_all_papers()
+    uncategorized = {pid: p for pid, p in papers.items() if not p.get('categories')}
+    if not uncategorized:
+        return 0
+
+    log(f"Categorizing {len(uncategorized)} papers...")
+
+    paper_list = []
+    for pid, p in list(uncategorized.items())[:30]:  # Batch limit
+        abstract = (p.get('abstract') or p.get('summary') or '')[:100]
+        paper_list.append(f"- {pid}: {p.get('title','?')} | {abstract}")
+
+    prompt = (
+        "Categorize each paper into 1-2 categories from: "
+        "LLM Architecture, LLM Reasoning, LLM Serving, GPU Kernels, AI Compilers, "
+        "Edge AI, Robotics, Voice AI, Spaced Repetition, Performance Analysis, Other.\n\n"
+        + "\n".join(paper_list) +
+        '\n\nOutput ONLY a JSON object mapping paper ID to list of categories. No other text.'
+    )
+
+    try:
+        result = subprocess.run(["claude", "-p", prompt],
+                                capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            return 0
+
+        import re
+        raw = result.stdout.strip()
+        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = re.sub(r'\s*```$', '', raw)
+        match = re.search(r'\{[\s\S]*\}', raw)
+        if not match:
+            return 0
+        categories_map = json.loads(match.group())
+
+        import yaml as _yaml
+        updated = 0
+        for pid, cats in categories_map.items():
+            paper_path = Path(__file__).parent / "papers" / f"{pid}.yaml"
+            if not paper_path.exists() or not isinstance(cats, list):
+                continue
+            with open(paper_path, 'r') as f:
+                data = _yaml.safe_load(f) or {}
+            data['categories'] = cats
+            with open(paper_path, 'w') as f:
+                _yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            updated += 1
+        return updated
+    except Exception as e:
+        log(f"Categorization failed: {e}")
+        return 0
+
+
 def main():
     log("=== Daily automation started ===")
 
@@ -176,7 +232,13 @@ def main():
             f"{total_new} new papers discovered. No cards due today."
         )
 
-    # 5. Auto-cleanup
+    # 5. Auto-categorize uncategorized papers
+    log("Step 4: Categorizing papers...")
+    categorized = auto_categorize()
+    if categorized:
+        log(f"Categorized {categorized} papers")
+
+    # 6. Auto-cleanup
     log("Step 3: Disk cleanup...")
     removed_disc = cleanup_old_discoveries()
     removed_pdfs, freed = cleanup_pdfs_for_mastered()

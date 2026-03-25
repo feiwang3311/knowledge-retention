@@ -1,13 +1,12 @@
 categories:
-  - NLP
-  - Computer Vision
-  - Reinforcement Learning
-  - Deep Learning
-  - Machine Learning
-  - Theory
-  - Systems
-  - Optimization
-  - Generative Models
+  - LLM Architecture
+  - LLM Reasoning
+  - LLM Serving
+  - GPU Kernels
+  - AI Compilers
+  - Edge AI
   - Robotics
-  - Compilers
-  - GPU Kernel
+  - Voice AI
+  - Spaced Repetition
+  - Performance Analysis
+  - Other
