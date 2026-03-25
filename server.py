@@ -781,22 +781,26 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         register_cards(existing)
 
     def api_radio_papers(self):
-        """Return papers available for radio (those with cards)."""
+        """Return all papers available for radio."""
         papers = load_all_papers()
         all_cards = load_all_cards()
         studied = get_studied_paper_ids(papers)
         available = []
         for pid, p in papers.items():
-            if pid in all_cards and all_cards[pid].get('cards'):
-                available.append({
-                    "id": pid,
-                    "title": p.get("title", "Unknown"),
-                    "card_count": len(all_cards[pid]["cards"]),
-                    "categories": p.get("categories", []),
-                    "studied": pid in studied,
-                })
-        # Studied papers first
-        available.sort(key=lambda x: (not x["studied"], x["title"]))
+            summary = p.get('summary') or p.get('abstract', '')
+            if not summary:
+                continue  # Skip papers with no content at all
+            card_count = len(all_cards.get(pid, {}).get('cards', []))
+            available.append({
+                "id": pid,
+                "title": p.get("title", "Unknown"),
+                "card_count": card_count,
+                "categories": p.get("categories", []),
+                "status": p.get("status", "unknown"),
+                "studied": pid in studied,
+            })
+        # Sort: studied first, then by citation count
+        available.sort(key=lambda x: (not x["studied"], -(papers.get(x["id"], {}).get("citation_count") or 0)))
         json_response(self, {"papers": available})
 
     def api_radio_playlist(self):
@@ -813,31 +817,28 @@ class RetentionHandler(SimpleHTTPRequestHandler):
 
         segments = []
 
-        # Only include studied papers by default (or specific papers if filtered)
         studied = get_studied_paper_ids(papers)
 
-        # 1. Paper deep-dives — intro + key ideas woven into narrative
+        # 1. Paper narratives
         for pid, p in papers.items():
-            if pid not in all_cards:
-                continue
+            # Filter logic
             if filter_ids is not None:
                 if pid not in filter_ids:
                     continue
             else:
+                # Default: studied papers only
                 if pid not in studied:
                     continue
 
             title = p.get('title', 'Unknown')
             summary = p.get('summary') or p.get('abstract', '')
-            cards = all_cards[pid].get('cards', [])
+            cards = all_cards.get(pid, {}).get('cards', [])
 
-            if not summary and not cards:
+            if not summary:
                 continue
 
             # Opening: what is this paper about
-            intro = f"Let's talk about {title}. "
-            if summary:
-                intro += summary
+            intro = f"Let's talk about {title}. {summary}"
             segments.append({
                 "type": "summary",
                 "label": title[:55],
@@ -845,7 +846,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 "pause_after": 3,
             })
 
-            # Key ideas: narrative style, not Q&A
+            # Key ideas from cards (if available)
             for card in cards:
                 q = card.get('question', '')
                 a = card.get('answer', '')

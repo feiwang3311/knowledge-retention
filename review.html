@@ -978,8 +978,10 @@ header h1 { font-size: 20px; font-weight: 600; }
     <div id="radio-picker" style="margin-bottom: 16px;">
       <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
         <select id="radio-source" onchange="onRadioSourceChange()" style="padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px;">
-          <option value="all">All papers with cards</option>
-          <option value="selected">Selected papers</option>
+          <option value="studied">Studied papers</option>
+          <option value="all">All papers</option>
+          <option value="unread">Unread papers</option>
+          <option value="selected">Pick papers</option>
         </select>
         <button class="btn primary" onclick="loadRadio()">Load Playlist</button>
       </div>
@@ -1934,25 +1936,35 @@ async function onRadioSourceChange() {
   const source = document.getElementById('radio-source').value;
   const selectDiv = document.getElementById('radio-paper-select');
 
-  if (source === 'all') {
-    selectDiv.style.display = 'none';
-    radioState.selectedPaperIds = null;
-  } else {
+  if (source === 'selected') {
     selectDiv.style.display = '';
-    // Load available papers
     const data = await api('/api/radio/papers');
     const papers = data.papers || [];
     if (!radioState.selectedPaperIds) radioState.selectedPaperIds = new Set();
     selectDiv.innerHTML = papers.length === 0
-      ? '<div style="padding: 8px; color: var(--text-dim);">No papers with cards yet.</div>'
+      ? '<div style="padding: 8px; color: var(--text-dim);">No papers available.</div>'
       : papers.map(p => `
         <label style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; font-size: 13px; border-radius: 4px;"
                onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
           <input type="checkbox" ${radioState.selectedPaperIds.has(p.id) ? 'checked' : ''}
                  onchange="toggleRadioPaper('${p.id}', this.checked)">
-          <span>${p.title} <span style="color: var(--text-dim);">(${p.card_count} cards)</span></span>
+          <span>${p.title} <span style="color: var(--text-dim);">(${p.card_count ? p.card_count + ' cards' : 'summary only'}${p.studied ? '' : ' · unread'})</span></span>
         </label>
       `).join('');
+  } else if (source === 'all' || source === 'unread') {
+    selectDiv.style.display = 'none';
+    // Pre-select all or unread papers
+    const data = await api('/api/radio/papers');
+    const papers = data.papers || [];
+    if (source === 'all') {
+      radioState.selectedPaperIds = new Set(papers.map(p => p.id));
+    } else {
+      radioState.selectedPaperIds = new Set(papers.filter(p => !p.studied).map(p => p.id));
+    }
+  } else {
+    // 'studied' — use default (no filter_ids, server handles it)
+    selectDiv.style.display = 'none';
+    radioState.selectedPaperIds = null;
   }
 }
 
