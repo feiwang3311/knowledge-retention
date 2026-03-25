@@ -98,6 +98,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_review_stats()
         elif path == "/api/radio/playlist":
             self.api_radio_playlist()
+        elif path == "/api/radio/papers":
+            self.api_radio_papers()
         elif path == "/api/papers":
             self.api_papers()
         elif path == "/api/topics":
@@ -777,9 +779,30 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         save_cards(paper_id, existing)
         register_cards(existing)
 
+    def api_radio_papers(self):
+        """Return papers available for radio (those with cards)."""
+        papers = load_all_papers()
+        all_cards = load_all_cards()
+        available = []
+        for pid, p in papers.items():
+            if pid in all_cards and all_cards[pid].get('cards'):
+                available.append({
+                    "id": pid,
+                    "title": p.get("title", "Unknown"),
+                    "card_count": len(all_cards[pid]["cards"]),
+                    "categories": p.get("categories", []),
+                })
+        json_response(self, {"papers": available})
+
     def api_radio_playlist(self):
         """Generate a narrative playlist for passive audio learning.
-        Structured as mini-lectures per paper, not Q&A flashcards."""
+        Supports optional paper_ids query param to filter papers."""
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        filter_ids = None
+        if 'paper_ids' in params:
+            filter_ids = set(params['paper_ids'][0].split(','))
+
         papers = load_all_papers()
         all_cards = load_all_cards()
 
@@ -788,6 +811,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         # 1. Paper deep-dives — intro + key ideas woven into narrative
         for pid, p in papers.items():
             if pid not in all_cards:
+                continue
+            if filter_ids is not None and pid not in filter_ids:
                 continue
 
             title = p.get('title', 'Unknown')
@@ -833,7 +858,15 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                     "pause_after": 3,
                 })
 
-        # 2. New discoveries — brief introductions
+        # 2. New discoveries — only when not filtering specific papers
+        if filter_ids is not None:
+            json_response(self, {
+                "segments": segments,
+                "total": len(segments),
+                "estimated_minutes": round(len(segments) * 0.4, 1),
+            })
+            return
+
         discovered = [(pid, p) for pid, p in papers.items() if p.get("status") == "discovered"]
         discovered.sort(key=lambda x: x[1].get("relevance_score", 0), reverse=True)
         for pid, p in discovered[:5]:

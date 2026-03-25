@@ -975,12 +975,18 @@ header h1 { font-size: 20px; font-weight: 600; }
 
   <!-- Radio -->
   <div id="radio" class="tab-content">
-    <div class="radio-player" id="radio-area">
-      <div class="start-review">
-        <h2>Knowledge Radio</h2>
-        <p>Listen to your knowledge while doing other things</p>
-        <button class="start-btn" onclick="loadRadio()">Load Playlist</button>
+    <div id="radio-picker" style="margin-bottom: 16px;">
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <select id="radio-source" onchange="onRadioSourceChange()" style="padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px;">
+          <option value="all">All papers with cards</option>
+          <option value="selected">Selected papers</option>
+        </select>
+        <button class="btn primary" onclick="loadRadio()">Load Playlist</button>
       </div>
+      <div id="radio-paper-select" style="display: none; margin-top: 10px; max-height: 200px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px;"></div>
+    </div>
+    <div class="radio-player" id="radio-area">
+      <div class="empty-state">Select papers and load a playlist to start listening.</div>
     </div>
   </div>
 
@@ -1505,6 +1511,7 @@ function renderPaperItem(p) {
           <button class="btn" onclick="generateCards('${p.id}')">
             ${p.card_count > 0 ? 'Regen Cards' : 'Gen Cards'}
           </button>
+          ${p.card_count > 0 ? `<button class="btn" onclick="listenToPaper('${p.id}')" title="Listen in Radio">&#9654; Listen</button>` : ''}
           <button class="vote-btn bad" onclick="if(confirm('Delete this paper?')) removePaper('${p.id}')" style="padding: 4px 8px;">x</button>
         </div>
       </div>
@@ -1827,6 +1834,7 @@ function renderStudyView(el, study) {
 
         <div class="audio-controls" style="margin-top: 12px;">
           <button class="audio-btn" onclick="tts.toggle(document.querySelector('.study-header .abstract').textContent)">&#9654; Listen to summary</button>
+          <button class="audio-btn" onclick="listenToPaper('${p.id}')">&#9654; Full Radio</button>
         </div>
       </div>
 
@@ -1923,19 +1931,78 @@ const radioState = {
   current: -1,
   playing: false,
   speed: 1.0,
+  selectedPaperIds: null, // null = all, Set = specific papers
 };
+
+async function onRadioSourceChange() {
+  const source = document.getElementById('radio-source').value;
+  const selectDiv = document.getElementById('radio-paper-select');
+
+  if (source === 'all') {
+    selectDiv.style.display = 'none';
+    radioState.selectedPaperIds = null;
+  } else {
+    selectDiv.style.display = '';
+    // Load available papers
+    const data = await api('/api/radio/papers');
+    const papers = data.papers || [];
+    if (!radioState.selectedPaperIds) radioState.selectedPaperIds = new Set();
+    selectDiv.innerHTML = papers.length === 0
+      ? '<div style="padding: 8px; color: var(--text-dim);">No papers with cards yet.</div>'
+      : papers.map(p => `
+        <label style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; font-size: 13px; border-radius: 4px;"
+               onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+          <input type="checkbox" ${radioState.selectedPaperIds.has(p.id) ? 'checked' : ''}
+                 onchange="toggleRadioPaper('${p.id}', this.checked)">
+          <span>${p.title} <span style="color: var(--text-dim);">(${p.card_count} cards)</span></span>
+        </label>
+      `).join('');
+  }
+}
+
+function toggleRadioPaper(paperId, checked) {
+  if (!radioState.selectedPaperIds) radioState.selectedPaperIds = new Set();
+  if (checked) radioState.selectedPaperIds.add(paperId);
+  else radioState.selectedPaperIds.delete(paperId);
+}
+
+function listenToPaper(paperId) {
+  // Called from Explore tab — switch to Radio and play just this paper
+  radioState.selectedPaperIds = new Set([paperId]);
+  radioState.playlist = null;
+
+  // Switch to radio tab
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="radio"]').classList.add('active');
+  document.getElementById('radio').classList.add('active');
+
+  // Set picker to "selected"
+  document.getElementById('radio-source').value = 'selected';
+  onRadioSourceChange().then(() => {
+    // Check the paper in the list
+    const cb = document.querySelector(`#radio-paper-select input[onchange*="${paperId}"]`);
+    if (cb) cb.checked = true;
+    loadRadio();
+  });
+}
 
 async function loadRadio() {
   const area = document.getElementById('radio-area');
   area.innerHTML = '<div class="loading">Loading playlist...</div>';
 
-  const data = await api('/api/radio/playlist');
+  let url = '/api/radio/playlist';
+  if (radioState.selectedPaperIds && radioState.selectedPaperIds.size > 0) {
+    url += '?paper_ids=' + [...radioState.selectedPaperIds].join(',');
+  }
+
+  const data = await api(url);
   radioState.playlist = data.segments || [];
   radioState.current = -1;
   radioState.playing = false;
 
   if (radioState.playlist.length === 0) {
-    area.innerHTML = '<div class="empty-state">No content for radio. Add papers and generate cards first.</div>';
+    area.innerHTML = '<div class="empty-state">No content for these papers. Select papers with cards or generate cards first.</div>';
     return;
   }
 
