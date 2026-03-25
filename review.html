@@ -584,6 +584,105 @@ header h1 { font-size: 20px; font-weight: 600; }
   font-size: 12px;
 }
 
+/* Discover tab */
+.discover-add-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.discover-add-bar input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.discover-add-bar select {
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.discover-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 10px;
+}
+
+.discover-card .title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.discover-card .meta { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.discover-card .abstract { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin-bottom: 12px; max-height: 60px; overflow: hidden; }
+.discover-card .abstract.expanded { max-height: none; }
+.discover-card .reason { font-size: 11px; color: var(--purple); margin-bottom: 8px; }
+
+.discover-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.vote-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.vote-btn:hover { border-color: var(--accent); color: var(--text); }
+.vote-btn.good { border-color: var(--green); color: var(--green); }
+.vote-btn.bad { border-color: var(--red); color: var(--red); }
+.vote-btn.selected { font-weight: 700; }
+.vote-btn.good.selected { background: var(--green); color: white; }
+.vote-btn.bad.selected { background: var(--red); color: white; }
+
+.priority-select {
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.topic-list {
+  margin-top: 20px;
+}
+
+.topic-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.topic-item .topic-priority {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.topic-item .topic-priority.important { background: #422006; color: var(--orange); }
+.topic-item .topic-priority.relevant { background: #1e293b; color: var(--accent); }
+.topic-item .topic-priority.hobby { background: #052e16; color: var(--green); }
+
 /* Empty state */
 .empty-state {
   text-align: center;
@@ -645,6 +744,7 @@ header h1 { font-size: 20px; font-weight: 600; }
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="review">Review</button>
       <button class="tab" data-tab="radio">Radio</button>
+      <button class="tab" data-tab="discover">Discover</button>
       <button class="tab" data-tab="papers">Papers</button>
     </div>
   </header>
@@ -666,6 +766,29 @@ header h1 { font-size: 20px; font-weight: 600; }
   <!-- Review -->
   <div id="review" class="tab-content">
     <div class="review-container" id="review-area"></div>
+  </div>
+
+  <!-- Discover -->
+  <div id="discover" class="tab-content">
+    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">Add Paper or Topic</h3>
+    <div class="discover-add-bar">
+      <input type="text" id="add-input" placeholder="Paste a URL, paper title, or describe a topic you want to learn about..." onkeydown="if(event.key==='Enter')addItem()">
+      <select id="add-type">
+        <option value="auto">Auto-detect</option>
+        <option value="topic">Topic</option>
+      </select>
+      <select id="add-priority">
+        <option value="relevant">Relevant</option>
+        <option value="important">Important</option>
+        <option value="hobby">Hobby</option>
+      </select>
+      <button class="btn primary" onclick="addItem()">Add</button>
+    </div>
+
+    <div id="topics-section"></div>
+
+    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 12px;">New Discoveries — Rate These</h3>
+    <div id="discover-list"></div>
   </div>
 
   <!-- Radio -->
@@ -803,6 +926,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'dashboard') loadDashboard();
     if (tab.dataset.tab === 'papers') loadPapers();
     if (tab.dataset.tab === 'review') showReviewStart();
+    if (tab.dataset.tab === 'discover') loadDiscover();
     if (tab.dataset.tab === 'radio' && !radioState.playlist) loadRadio();
   });
 });
@@ -1250,6 +1374,152 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === '4') rateCard(5);
   }
 });
+
+// ---- Discover Tab ----
+
+let discoverData = null;
+
+async function loadDiscover() {
+  // Load papers with status 'discovered' (newest first)
+  const papersResp = await api('/api/papers');
+  const discovered = (papersResp.papers || [])
+    .filter(p => p.status === 'discovered')
+    .sort((a, b) => (b.added_at || '').localeCompare(a.added_at || ''));
+  discoverData = discovered;
+
+  // Load topics
+  const topicsResp = await api('/api/topics');
+  renderDiscoverList();
+  renderTopics(topicsResp.topics || []);
+}
+
+function renderDiscoverList() {
+  const el = document.getElementById('discover-list');
+  if (!discoverData || discoverData.length === 0) {
+    el.innerHTML = '<div class="empty-state">No new discoveries to review. Run <code>python3 papers_cli.py discover</code> to find papers.</div>';
+    return;
+  }
+
+  el.innerHTML = discoverData.map(p => `
+    <div class="discover-card" id="disc-${p.id}">
+      <div class="title">${p.title}</div>
+      <div class="meta">
+        ${p.year || '?'} · ${(p.authors || []).slice(0, 3).join(', ')}${(p.authors||[]).length > 3 ? ' et al.' : ''}
+        ${p.card_count > 0 ? `· ${p.card_count} cards` : ''}
+      </div>
+      <div class="reason">${p.discovery_reason || p.source_type || ''}</div>
+      <div class="discover-actions">
+        <button class="vote-btn good" onclick="votePaper('${p.id}', 'good', this)">&#x1F44D; Keep</button>
+        <button class="vote-btn bad" onclick="votePaper('${p.id}', 'bad', this)">&#x1F44E; Skip</button>
+        <select class="priority-select" onchange="setPaperPriority('${p.id}', this.value)">
+          <option value="relevant">Relevant</option>
+          <option value="important">Important</option>
+          <option value="hobby">Hobby</option>
+        </select>
+        <button class="btn" onclick="generateCards('${p.id}')" style="margin-left: auto;">Generate Cards</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function votePaper(paperId, vote, btn) {
+  // Good = promote to 'queued', Bad = remove
+  if (vote === 'good') {
+    await api(`/api/papers/${paperId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status: 'queued' }),
+    });
+    // Save feedback
+    await api('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ paper_id: paperId, vote: 'good' }),
+    });
+    toast('Paper queued for reading');
+  } else {
+    await api(`/api/papers/${paperId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status: 'mastered' }),  // Skip = archive it
+    });
+    await api('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ paper_id: paperId, vote: 'bad' }),
+    });
+    toast('Paper skipped');
+  }
+  // Remove from list
+  const card = document.getElementById(`disc-${paperId}`);
+  if (card) card.style.display = 'none';
+  discoverData = discoverData.filter(p => p.id !== paperId);
+}
+
+async function setPaperPriority(paperId, priority) {
+  await api('/api/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ paper_id: paperId, priority }),
+  });
+}
+
+function renderTopics(topics) {
+  const el = document.getElementById('topics-section');
+  if (!topics.length) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `
+    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Your Topics</h3>
+    <div class="topic-list">
+      ${topics.map(t => `
+        <div class="topic-item">
+          <span>${t.description}</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="topic-priority ${t.priority}">${t.priority}</span>
+            <button class="vote-btn bad" onclick="removeTopic('${t.id}')" style="padding: 4px 8px;">x</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function addItem() {
+  const input = document.getElementById('add-input');
+  const type = document.getElementById('add-type').value;
+  const priority = document.getElementById('add-priority').value;
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.disabled = true;
+
+  if (type === 'topic' || (type === 'auto' && !text.startsWith('http'))) {
+    // Add as a topic
+    await api('/api/topics', {
+      method: 'POST',
+      body: JSON.stringify({ description: text, priority }),
+    });
+    toast('Topic added');
+    input.value = '';
+    loadDiscover();
+  } else {
+    // Add as a paper URL
+    const result = await api('/api/papers/add-url', {
+      method: 'POST',
+      body: JSON.stringify({ url: text, priority }),
+    });
+    if (result.ok) {
+      toast(`Paper added: ${result.title || 'OK'}`);
+      input.value = '';
+      loadDiscover();
+    } else {
+      toast(result.error || 'Failed to add', 'error');
+    }
+  }
+  input.disabled = false;
+}
+
+async function removeTopic(topicId) {
+  await api(`/api/topics/${topicId}`, { method: 'DELETE' });
+  loadDiscover();
+}
 
 // ---- Knowledge Radio ----
 

@@ -72,7 +72,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -96,6 +96,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_radio_playlist()
         elif path == "/api/papers":
             self.api_papers()
+        elif path == "/api/topics":
+            self.api_get_topics()
         elif path.startswith("/api/papers/"):
             paper_id = sanitize_paper_id(path[len("/api/papers/"):])
             if not paper_id:
@@ -127,6 +129,15 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_review_answer()
         elif path == "/api/tts":
             self.api_tts()
+        elif path == "/api/feedback":
+            self.api_save_feedback()
+        elif path == "/api/topics":
+            self.api_add_topic()
+        elif path == "/api/papers/add-url":
+            self.api_add_paper_url()
+        elif path.startswith("/api/topics/"):
+            topic_id = path[len("/api/topics/"):]
+            self.api_delete_topic(topic_id)
         elif path.startswith("/api/cards/generate/"):
             paper_id = sanitize_paper_id(path[len("/api/cards/generate/"):])
             if not paper_id:
@@ -139,6 +150,16 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 json_response(self, {"error": "Invalid paper ID"}, 400)
             else:
                 self.api_update_status(paper_id)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if path.startswith("/api/topics/"):
+            topic_id = path[len("/api/topics/"):]
+            self.api_delete_topic(topic_id)
         else:
             self.send_response(404)
             self.end_headers()
@@ -279,6 +300,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 "card_count": card_count,
                 "due_count": due_count,
                 "relevance_score": p.get("relevance_score"),
+                "discovery_reason": p.get("discovery_reason", ""),
+                "citation_count": p.get("citation_count"),
                 "added_at": p.get("added_at"),
             })
 
@@ -366,6 +389,138 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             yaml.dump(paper, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         json_response(self, {"ok": True, "status": new_status})
+
+    # ---- Discover / Feedback / Topics ----
+
+    def _load_feedback(self):
+        path = BASE_DIR / "feedback.json"
+        if path.exists():
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"votes": {}, "priorities": {}}
+
+    def _save_feedback(self, data):
+        with open(BASE_DIR / "feedback.json", 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def _load_topics(self):
+        path = BASE_DIR / "topics.json"
+        if path.exists():
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"topics": []}
+
+    def _save_topics(self, data):
+        with open(BASE_DIR / "topics.json", 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def api_get_topics(self):
+        data = self._load_topics()
+        json_response(self, data)
+
+    def api_add_topic(self):
+        body = read_body(self)
+        desc = body.get("description", "").strip()
+        priority = body.get("priority", "relevant")
+        if not desc:
+            json_response(self, {"error": "description required"}, 400)
+            return
+
+        data = self._load_topics()
+        topic_id = f"topic-{len(data['topics']) + 1}-{int(datetime.now().timestamp())}"
+        data["topics"].append({
+            "id": topic_id,
+            "description": desc,
+            "priority": priority,
+            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        self._save_topics(data)
+        json_response(self, {"ok": True, "id": topic_id})
+
+    def api_delete_topic(self, topic_id):
+        data = self._load_topics()
+        data["topics"] = [t for t in data["topics"] if t.get("id") != topic_id]
+        self._save_topics(data)
+        json_response(self, {"ok": True})
+
+    def api_save_feedback(self):
+        body = read_body(self)
+        paper_id = body.get("paper_id")
+        if not paper_id:
+            json_response(self, {"error": "paper_id required"}, 400)
+            return
+
+        fb = self._load_feedback()
+        if body.get("vote"):
+            fb["votes"][paper_id] = body["vote"]
+        if body.get("priority"):
+            fb["priorities"][paper_id] = body["priority"]
+        self._save_feedback(fb)
+        json_response(self, {"ok": True})
+
+    def api_add_paper_url(self):
+        body = read_body(self)
+        url = body.get("url", "").strip()
+        if not url:
+            json_response(self, {"error": "url required"}, 400)
+            return
+
+        from retention import scrape_web_page
+        from papers_cli import get_paper_id, save_yaml, PAPERS_DIR, fetch_arxiv_metadata
+
+        if 'arxiv.org' in url:
+            metadata = fetch_arxiv_metadata(url)
+            if not metadata:
+                json_response(self, {"error": "Could not fetch arXiv metadata"}, 400)
+                return
+            paper_id = get_paper_id(metadata['title'], metadata['year'])
+            paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+            if paper_path.exists():
+                json_response(self, {"error": "Paper already exists", "id": paper_id}, 400)
+                return
+            paper_data = {
+                'title': metadata['title'],
+                'authors': metadata['authors'],
+                'year': metadata['year'],
+                'abstract': metadata['abstract'],
+                'summary': metadata['abstract'],
+                'url': metadata['url'],
+                'status': 'queued',
+                'source_type': 'arxiv',
+                'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        else:
+            scraped = scrape_web_page(url)
+            if not scraped:
+                json_response(self, {"error": "Could not fetch page"}, 400)
+                return
+            title = scraped['title']
+            paper_id = get_paper_id(title, datetime.now().year)
+            paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+            if paper_path.exists():
+                json_response(self, {"error": "Already exists", "id": paper_id}, 400)
+                return
+            paper_data = {
+                'title': title,
+                'year': datetime.now().year,
+                'abstract': scraped['description'] or scraped['text'][:300],
+                'summary': scraped['description'] or scraped['text'][:300],
+                'url': url,
+                'status': 'queued',
+                'source_type': 'web',
+                'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+        paper_data = {k: v for k, v in paper_data.items() if v}
+        PAPERS_DIR.mkdir(exist_ok=True)
+        save_yaml(paper_path, paper_data)
+        json_response(self, {"ok": True, "id": paper_id, "title": paper_data.get('title', '')})
 
     def api_radio_playlist(self):
         """Generate a narrative playlist for passive audio learning.

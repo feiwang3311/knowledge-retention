@@ -12,4 +12,6 @@ interests.yaml
 feeds.yaml
 connections.yaml
 daily.log
+feedback.json
+topics.json
 .tts_cache/
