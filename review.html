@@ -460,6 +460,130 @@ header h1 { font-size: 20px; font-weight: 600; }
 .start-btn:hover { opacity: 0.9; }
 .start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Radio player */
+.radio-player {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.radio-now-playing {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+  margin: 24px 0;
+}
+
+.radio-now-playing .segment-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.radio-now-playing .segment-label {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.radio-now-playing .segment-text {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  max-height: 120px;
+  overflow-y: auto;
+  text-align: left;
+  margin: 16px 0;
+  padding: 12px;
+  background: var(--surface2);
+  border-radius: 8px;
+}
+
+.radio-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.radio-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.radio-btn:hover { border-color: var(--accent); }
+.radio-btn.play { width: 64px; height: 64px; font-size: 24px; background: var(--accent); border-color: var(--accent); }
+.radio-btn.play:hover { opacity: 0.9; }
+
+.radio-progress {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 12px 0;
+}
+
+.radio-playlist {
+  margin-top: 20px;
+}
+
+.radio-playlist-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.radio-playlist-item:hover { background: var(--surface2); }
+.radio-playlist-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+.radio-playlist-item .type-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface2);
+  color: var(--text-dim);
+}
+
+.radio-playlist-item .type-badge.review { background: #422006; color: var(--orange); }
+.radio-playlist-item .type-badge.answer { background: #052e16; color: var(--green); }
+.radio-playlist-item .type-badge.summary { background: #1e293b; color: var(--accent); }
+.radio-playlist-item .type-badge.discovery { background: #2e1065; color: var(--purple); }
+.radio-playlist-item .type-badge.reinforcement { background: #052e16; color: var(--green); }
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.speed-control select {
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;
@@ -520,6 +644,7 @@ header h1 { font-size: 20px; font-weight: 600; }
     <div class="tabs">
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="review">Review</button>
+      <button class="tab" data-tab="radio">Radio</button>
       <button class="tab" data-tab="papers">Papers</button>
     </div>
   </header>
@@ -541,6 +666,17 @@ header h1 { font-size: 20px; font-weight: 600; }
   <!-- Review -->
   <div id="review" class="tab-content">
     <div class="review-container" id="review-area"></div>
+  </div>
+
+  <!-- Radio -->
+  <div id="radio" class="tab-content">
+    <div class="radio-player" id="radio-area">
+      <div class="start-review">
+        <h2>Knowledge Radio</h2>
+        <p>Listen to your knowledge while doing other things</p>
+        <button class="start-btn" onclick="loadRadio()">Load Playlist</button>
+      </div>
+    </div>
   </div>
 
   <!-- Papers -->
@@ -667,6 +803,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'dashboard') loadDashboard();
     if (tab.dataset.tab === 'papers') loadPapers();
     if (tab.dataset.tab === 'review') showReviewStart();
+    if (tab.dataset.tab === 'radio' && !radioState.playlist) loadRadio();
   });
 });
 
@@ -1113,6 +1250,171 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === '4') rateCard(5);
   }
 });
+
+// ---- Knowledge Radio ----
+
+const radioState = {
+  playlist: null,
+  current: -1,
+  playing: false,
+  speed: 1.0,
+};
+
+async function loadRadio() {
+  const area = document.getElementById('radio-area');
+  area.innerHTML = '<div class="loading">Loading playlist...</div>';
+
+  const data = await api('/api/radio/playlist');
+  radioState.playlist = data.segments || [];
+  radioState.current = -1;
+  radioState.playing = false;
+
+  if (radioState.playlist.length === 0) {
+    area.innerHTML = '<div class="empty-state">No content for radio. Add papers and generate cards first.</div>';
+    return;
+  }
+
+  renderRadio();
+}
+
+function renderRadio() {
+  const area = document.getElementById('radio-area');
+  const s = radioState;
+  const segment = s.current >= 0 ? s.playlist[s.current] : null;
+
+  area.innerHTML = `
+    <div class="radio-now-playing">
+      ${segment ? `
+        <div class="segment-type">${segment.type}</div>
+        <div class="segment-label">${segment.label}</div>
+        <div class="segment-text">${segment.text}</div>
+      ` : `
+        <div class="segment-label">Ready to play</div>
+        <p style="color: var(--text-dim);">${s.playlist.length} segments — review cards, summaries, discoveries</p>
+      `}
+    </div>
+
+    <div class="radio-controls">
+      <button class="radio-btn" onclick="radioSkip(-1)" title="Previous">&#9664;&#9664;</button>
+      <button class="radio-btn play" onclick="radioToggle()" title="${s.playing ? 'Pause' : 'Play'}">
+        ${s.playing ? '&#9646;&#9646;' : '&#9654;'}
+      </button>
+      <button class="radio-btn" onclick="radioSkip(1)" title="Next">&#9654;&#9654;</button>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="radio-progress">
+        ${s.current >= 0 ? `${s.current + 1} / ${s.playlist.length}` : `${s.playlist.length} segments`}
+      </div>
+      <div class="speed-control">
+        Speed:
+        <select onchange="radioSetSpeed(this.value)">
+          <option value="0.8" ${s.speed===0.8?'selected':''}>0.8x</option>
+          <option value="1" ${s.speed===1?'selected':''}>1x</option>
+          <option value="1.2" ${s.speed===1.2?'selected':''}>1.2x</option>
+          <option value="1.5" ${s.speed===1.5?'selected':''}>1.5x</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="progress-bar"><div class="fill" style="width: ${s.current >= 0 ? ((s.current + 1) / s.playlist.length * 100) : 0}%"></div></div>
+
+    <div class="radio-playlist" style="max-height: 300px; overflow-y: auto;">
+      ${s.playlist.map((seg, i) => `
+        <div class="radio-playlist-item ${i === s.current ? 'active' : ''}" onclick="radioJump(${i})">
+          <span>${seg.label}</span>
+          <span class="type-badge ${seg.type}">${seg.type}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function radioToggle() {
+  if (radioState.playing) {
+    radioState.playing = false;
+    tts.stop();
+    renderRadio();
+  } else {
+    radioState.playing = true;
+    if (radioState.current < 0) radioState.current = 0;
+    renderRadio();
+    await radioPlayCurrent();
+  }
+}
+
+async function radioPlayCurrent() {
+  const s = radioState;
+  if (!s.playing || s.current >= s.playlist.length) {
+    s.playing = false;
+    renderRadio();
+    return;
+  }
+
+  renderRadio();
+  const segment = s.playlist[s.current];
+
+  // Prefetch next few segments
+  for (let i = s.current + 1; i < Math.min(s.current + 4, s.playlist.length); i++) {
+    tts.fetchAudio(s.playlist[i].text);
+  }
+
+  // Play current
+  const url = await tts.fetchAudio(segment.text);
+  if (!url || !s.playing) return;
+
+  const audio = new Audio(url);
+  audio.playbackRate = s.speed;
+  tts.audio = audio;
+  tts.speaking = true;
+
+  await new Promise(resolve => {
+    audio.onended = resolve;
+    audio.onerror = resolve;
+    audio.play().catch(resolve);
+  });
+
+  tts.speaking = false;
+
+  if (!s.playing) return;
+
+  // Pause between segments
+  const pauseMs = (segment.pause_after || 2) * 1000;
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, pauseMs);
+    // Store so we can cancel on stop
+    radioState._pauseTimer = timer;
+  });
+
+  if (!s.playing) return;
+
+  // Next segment
+  s.current++;
+  await radioPlayCurrent();
+}
+
+function radioSkip(direction) {
+  const s = radioState;
+  clearTimeout(s._pauseTimer);
+  tts.stop();
+  s.current = Math.max(0, Math.min(s.playlist.length - 1, s.current + direction));
+  renderRadio();
+  if (s.playing) radioPlayCurrent();
+}
+
+function radioJump(index) {
+  const s = radioState;
+  clearTimeout(s._pauseTimer);
+  tts.stop();
+  s.current = index;
+  renderRadio();
+  if (s.playing) radioPlayCurrent();
+}
+
+function radioSetSpeed(val) {
+  radioState.speed = parseFloat(val);
+  if (tts.audio) tts.audio.playbackRate = radioState.speed;
+}
 
 // ---- Init ----
 loadDashboard();

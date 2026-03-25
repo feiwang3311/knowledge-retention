@@ -911,6 +911,159 @@ def cmd_daily(_args):
     run_daily_check()
 
 
+def cmd_discover(_args):
+    """Discover papers using Semantic Scholar (semantic search + recommendations + citation graph)."""
+    from retention import (discover_via_semantic_scholar, load_interests,
+                           load_all_papers, RelevanceScorer)
+
+    print("=== Smart Paper Discovery ===\n")
+    interests = load_interests()
+    existing = load_all_papers()
+    existing_urls = {p.get('url', '') for p in existing.values()}
+
+    papers = discover_via_semantic_scholar(interests, existing)
+
+    if not papers:
+        print("No new papers found.")
+        return
+
+    # Save top papers
+    added = 0
+    for paper in papers:
+        if paper.get('url') in existing_urls:
+            continue
+
+        paper_id = get_paper_id(paper['title'], paper.get('year', 2025))
+        paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+        if paper_path.exists():
+            continue
+
+        relevance = RelevanceScorer.score(paper, interests)
+        paper_data = {
+            'title': paper['title'],
+            'authors': paper.get('authors', []),
+            'year': paper.get('year'),
+            'abstract': paper.get('abstract', ''),
+            'summary': paper.get('summary', ''),
+            'url': paper.get('url'),
+            'tags': [],
+            'categories': [],
+            'status': 'discovered',
+            'source_type': 'semantic_scholar',
+            'discovery_reason': paper.get('discovery_reason', ''),
+            'citation_count': paper.get('citation_count', 0),
+            's2_id': paper.get('s2_id', ''),
+            'relevance_score': relevance,
+            'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        paper_data = {k: v for k, v in paper_data.items() if v is not None and v != '' and v != []}
+        save_yaml(paper_path, paper_data)
+        cites = paper.get('citation_count', 0)
+        reason = paper.get('discovery_reason', '')[:40]
+        print(f"  + [{cites:>5} cites] {paper['title'][:55]}")
+        print(f"               via: {reason}")
+        added += 1
+        existing_urls.add(paper.get('url', ''))
+
+    print(f"\n=== Added {added} papers ===")
+
+
+def cmd_seed(_args):
+    """Use LLM to suggest seminal papers for your research interests, then find them on Semantic Scholar."""
+    from retention import (generate_seed_papers_prompt, load_interests,
+                           s2_semantic_search, CardGenerator)
+    import subprocess
+
+    interests = load_interests()
+    prompt = generate_seed_papers_prompt(interests)
+
+    print("=== Generating seed paper suggestions via LLM ===\n")
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            print(f"Error: {result.stderr}")
+            return
+        response = result.stdout.strip()
+    except Exception as e:
+        print(f"Error: {e}")
+        return
+
+    # Parse response
+    cards = CardGenerator._parse_response(response)
+    if not cards:
+        print("Failed to parse LLM response")
+        print(response[:500])
+        return
+
+    print(f"LLM suggested {len(cards)} papers:\n")
+    for paper in cards:
+        title = paper.get('title', '?')
+        area = paper.get('area', '?')
+        why = paper.get('why', '')
+        year = paper.get('year', '?')
+        print(f"  [{year}] {title}")
+        print(f"         Area: {area}")
+        print(f"         Why: {why}")
+        print()
+
+    # Now search Semantic Scholar for each and add them
+    import time
+    added = 0
+    existing = load_all_papers()
+    existing_urls = {p.get('url', '') for p in existing.values()}
+
+    for paper in cards:
+        title = paper.get('title', '')
+        if not title:
+            continue
+
+        # Search S2 for exact match
+        results = s2_semantic_search(f'"{title}"', limit=3)
+        time.sleep(1)
+
+        if not results:
+            print(f"  Not found on S2: {title[:50]}")
+            continue
+
+        # Take the best match
+        best = results[0]
+        if best.get('url') in existing_urls:
+            continue
+
+        paper_id = get_paper_id(best['title'], best.get('year', 2025))
+        paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+        if paper_path.exists():
+            continue
+
+        paper_data = {
+            'title': best['title'],
+            'authors': best.get('authors', []),
+            'year': best.get('year'),
+            'abstract': best.get('abstract', ''),
+            'summary': best.get('summary', ''),
+            'url': best.get('url'),
+            'tags': [],
+            'categories': [],
+            'status': 'discovered',
+            'source_type': 'semantic_scholar',
+            'discovery_reason': f"seed: {paper.get('area', '')} — {paper.get('why', '')}",
+            'citation_count': best.get('citation_count', 0),
+            's2_id': best.get('s2_id', ''),
+            'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        paper_data = {k: v for k, v in paper_data.items() if v is not None and v != '' and v != []}
+        save_yaml(paper_path, paper_data)
+        print(f"  + [{best.get('citation_count', 0):>5} cites] {best['title'][:55]}")
+        added += 1
+        existing_urls.add(best.get('url', ''))
+
+    print(f"\n=== Added {added} seed papers ===")
+
+
 def cmd_serve(_args):
     """Start the web review server."""
     from server import main as server_main
@@ -1031,6 +1184,12 @@ Examples:
     # daily
     subparsers.add_parser('daily', help='Run daily feed check')
 
+    # discover
+    subparsers.add_parser('discover', help='Discover papers via Semantic Scholar')
+
+    # seed
+    subparsers.add_parser('seed', help='Use LLM to suggest seminal papers for your interests')
+
     # serve
     subparsers.add_parser('serve', help='Start web review server')
 
@@ -1062,6 +1221,8 @@ Examples:
         'generate-cards': cmd_generate_cards,
         'review': cmd_review,
         'daily': cmd_daily,
+        'discover': cmd_discover,
+        'seed': cmd_seed,
         'serve': cmd_serve,
         'cleanup': cmd_cleanup,
         'disk': cmd_disk,

@@ -437,21 +437,26 @@ class RelevanceScorer:
         max_score = 0.0
 
         # Score against projects
+        # Use a threshold-based approach: 1 match = 0.2, 2 = 0.4, 3+ = 0.6+
         for project in interests.get('projects', []):
             keywords = project.get('keywords', [])
             weight = project.get('weight', 1.0)
             if not keywords:
                 continue
             matches = sum(1 for kw in keywords if kw.lower() in text)
-            project_score = (matches / len(keywords)) * weight
+            if matches == 0:
+                continue
+            # Diminishing returns: first matches count more
+            project_score = min(1.0, 0.2 * matches) * weight
             max_score = max(max_score, project_score)
 
-        # Score against standalone topics
+        # Score against standalone topics — any single topic match = 0.3
         topics = interests.get('topics', [])
         if topics:
             topic_matches = sum(1 for t in topics if t.lower() in text)
-            topic_score = topic_matches / len(topics) * 0.7  # topics slightly less weight
-            max_score = max(max_score, topic_score)
+            if topic_matches > 0:
+                topic_score = min(1.0, 0.3 * topic_matches)
+                max_score = max(max_score, topic_score)
 
         return round(min(1.0, max_score), 2)
 
@@ -514,6 +519,299 @@ class ConnectionFinder:
         # Sort by strength
         connections.sort(key=lambda c: c["strength"], reverse=True)
         return connections
+
+
+# ============ Semantic Scholar Discovery ============
+
+S2_BASE = "https://api.semanticscholar.org/graph/v1"
+S2_REC_BASE = "https://api.semanticscholar.org/recommendations/v1"
+S2_FIELDS = "title,abstract,year,citationCount,authors,url,externalIds,tldr"
+S2_API_KEY = os.environ.get("S2_API_KEY")  # Optional but recommended
+
+
+def _s2_get(url, timeout=15):
+    """Make a GET request to Semantic Scholar API."""
+    import time
+    req = urllib.request.Request(url, headers={'User-Agent': 'KnowledgeRetention/1.0'})
+    if S2_API_KEY:
+        req.add_header("x-api-key", S2_API_KEY)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            print("  Rate limited by Semantic Scholar, waiting 3s...")
+            time.sleep(3)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    return json.loads(response.read().decode('utf-8'))
+            except Exception:
+                pass
+        return None
+    except Exception as e:
+        print(f"  S2 API error: {e}")
+        return None
+
+
+def _s2_post(url, body, timeout=15):
+    """Make a POST request to Semantic Scholar API."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'KnowledgeRetention/1.0',
+        },
+        method='POST'
+    )
+    if S2_API_KEY:
+        req.add_header("x-api-key", S2_API_KEY)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except Exception as e:
+        print(f"  S2 API error: {e}")
+        return None
+
+
+def _s2_paper_to_dict(p):
+    """Convert S2 API paper object to our internal format."""
+    if not p or not p.get('title'):
+        return None
+    authors = [a.get('name', '') for a in (p.get('authors') or []) if a.get('name')]
+    ext_ids = p.get('externalIds') or {}
+    arxiv_id = ext_ids.get('ArXiv')
+    url = f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else (p.get('url') or '')
+    tldr = p.get('tldr', {})
+    summary = tldr.get('text', '') if tldr else ''
+
+    return {
+        'title': p['title'],
+        'authors': authors,
+        'year': p.get('year') or datetime.now().year,
+        'abstract': p.get('abstract') or summary or '',
+        'summary': summary or (p.get('abstract') or '')[:300],
+        'url': url,
+        'citation_count': p.get('citationCount', 0),
+        's2_id': p.get('paperId', ''),
+        'source_type': 'semantic_scholar',
+    }
+
+
+def s2_semantic_search(query, year_from=None, min_citations=0, limit=10):
+    """Search Semantic Scholar by meaning (not just keywords)."""
+    from urllib.parse import urlencode, quote
+    params = {
+        'query': query,
+        'fields': S2_FIELDS,
+        'limit': min(limit, 100),
+        'fieldsOfStudy': 'Computer Science',
+    }
+    if year_from:
+        params['year'] = f"{year_from}-"
+    if min_citations:
+        params['minCitationCount'] = str(min_citations)
+
+    url = f"{S2_BASE}/paper/search?{urlencode(params, quote_via=quote)}"
+    result = _s2_get(url)
+    if not result or 'data' not in result:
+        return []
+
+    papers = []
+    for p in result['data']:
+        paper = _s2_paper_to_dict(p)
+        if paper:
+            papers.append(paper)
+    return papers
+
+
+def s2_get_recommendations(seed_paper_ids, limit=20):
+    """Get paper recommendations based on seed papers.
+    seed_paper_ids can be S2 IDs or 'ARXIV:xxxx.xxxxx' format."""
+    url = f"{S2_REC_BASE}/papers/?fields={S2_FIELDS}&limit={limit}"
+    body = {
+        "positivePaperIds": seed_paper_ids,
+        "negativePaperIds": [],
+    }
+    result = _s2_post(url, body)
+    if not result or 'recommendedPapers' not in result:
+        return []
+
+    papers = []
+    for p in result['recommendedPapers']:
+        paper = _s2_paper_to_dict(p)
+        if paper:
+            papers.append(paper)
+    return papers
+
+
+def s2_get_citations(paper_id, limit=20):
+    """Get papers that cite a given paper (recent, important follow-up work)."""
+    from urllib.parse import urlencode
+    url = f"{S2_BASE}/paper/{paper_id}/citations?{urlencode({'fields': S2_FIELDS, 'limit': limit})}"
+    result = _s2_get(url)
+    if not result or 'data' not in result:
+        return []
+
+    papers = []
+    for item in result['data']:
+        p = item.get('citingPaper', {})
+        paper = _s2_paper_to_dict(p)
+        if paper:
+            papers.append(paper)
+    # Sort by citation count (most impactful first)
+    papers.sort(key=lambda x: x.get('citation_count', 0), reverse=True)
+    return papers
+
+
+def s2_get_references(paper_id, limit=20):
+    """Get papers referenced by a given paper (foundational work)."""
+    from urllib.parse import urlencode
+    url = f"{S2_BASE}/paper/{paper_id}/references?{urlencode({'fields': S2_FIELDS, 'limit': limit})}"
+    result = _s2_get(url)
+    if not result or 'data' not in result:
+        return []
+
+    papers = []
+    for item in result['data']:
+        p = item.get('citedPaper', {})
+        paper = _s2_paper_to_dict(p)
+        if paper:
+            papers.append(paper)
+    papers.sort(key=lambda x: x.get('citation_count', 0), reverse=True)
+    return papers
+
+
+def discover_via_semantic_scholar(interests=None, existing_papers=None):
+    """Smart paper discovery using Semantic Scholar.
+
+    Strategy:
+    1. Semantic search for each interest area (finds papers by meaning, not keywords)
+    2. Get recommendations based on papers already in the library
+    3. Walk citation graph of existing papers (find important follow-ups)
+
+    Returns list of discovered papers, sorted by citation count.
+    """
+    import time
+
+    if interests is None:
+        interests = load_interests()
+    if existing_papers is None:
+        existing_papers = load_all_papers()
+
+    existing_urls = {p.get('url', '') for p in existing_papers.values()}
+    existing_s2_ids = {p.get('s2_id', '') for p in existing_papers.values() if p.get('s2_id')}
+
+    all_discoveries = {}  # url -> paper dict (dedup)
+
+    def add_paper(paper):
+        url = paper.get('url', '')
+        s2_id = paper.get('s2_id', '')
+        if url in existing_urls or s2_id in existing_s2_ids:
+            return
+        if url in all_discoveries:
+            return
+        if url:
+            all_discoveries[url] = paper
+
+    # 1. Semantic search for each project/topic
+    print("  Semantic search...")
+    for project in interests.get('projects', []):
+        name = project.get('name', '')
+        keywords = project.get('keywords', [])
+        if not name:
+            continue
+        # Build a natural language query from project name + top keywords
+        query = f"{name} {' '.join(keywords[:3])}"
+        print(f"    Searching: {query}")
+        papers = s2_semantic_search(query, year_from=2023, limit=10)
+        for p in papers:
+            p['discovery_reason'] = f"semantic search: {name}"
+            add_paper(p)
+        time.sleep(1)  # Rate limit
+
+    for topic in interests.get('topics', []):
+        print(f"    Searching: {topic}")
+        papers = s2_semantic_search(topic, year_from=2023, limit=5)
+        for p in papers:
+            p['discovery_reason'] = f"semantic search: {topic}"
+            add_paper(p)
+        time.sleep(1)
+
+    # 2. Recommendations based on existing papers
+    seed_ids = []
+    for pid, p in existing_papers.items():
+        # Use arXiv ID if available
+        url = p.get('url', '')
+        arxiv_match = re.search(r'arxiv\.org/abs/(\d+\.\d+)', url)
+        if arxiv_match:
+            seed_ids.append(f"ARXIV:{arxiv_match.group(1)}")
+        elif p.get('s2_id'):
+            seed_ids.append(p['s2_id'])
+
+    if seed_ids:
+        print(f"  Getting recommendations from {len(seed_ids)} seed papers...")
+        # Use up to 5 seeds (API limit consideration)
+        recs = s2_get_recommendations(seed_ids[:5], limit=20)
+        for p in recs:
+            p['discovery_reason'] = "recommended based on your library"
+            add_paper(p)
+        time.sleep(1)
+
+    # 3. Citation graph: find impactful papers citing our seeds
+    for pid, p in list(existing_papers.items())[:3]:  # Top 3 papers only
+        url = p.get('url', '')
+        arxiv_match = re.search(r'arxiv\.org/abs/(\d+\.\d+)', url)
+        if arxiv_match:
+            s2_id = f"ARXIV:{arxiv_match.group(1)}"
+        elif p.get('s2_id'):
+            s2_id = p['s2_id']
+        else:
+            continue
+
+        print(f"  Citation walk: {p.get('title', '?')[:40]}...")
+        citations = s2_get_citations(s2_id, limit=10)
+        for c in citations:
+            c['discovery_reason'] = f"cites: {p.get('title', '?')[:40]}"
+            add_paper(c)
+        time.sleep(1)
+
+    # Sort all discoveries by citation count (most important first)
+    results = sorted(all_discoveries.values(),
+                     key=lambda x: x.get('citation_count', 0), reverse=True)
+
+    print(f"  Found {len(results)} unique papers via Semantic Scholar")
+    return results
+
+
+def generate_seed_papers_prompt(interests):
+    """Build a prompt for the LLM to suggest seminal papers for each interest area."""
+    projects = interests.get('projects', [])
+    topics = interests.get('topics', [])
+
+    areas = []
+    for p in projects:
+        areas.append(f"- {p['name']} (keywords: {', '.join(p.get('keywords', []))})")
+    for t in topics:
+        areas.append(f"- {t}")
+
+    return f"""I'm building a knowledge base for these research areas:
+
+{chr(10).join(areas)}
+
+For each area, suggest the 5 most important/seminal papers I should read.
+Prioritize:
+1. Foundational papers that everyone in the field should know
+2. Recent breakthrough papers (2023-2025) that changed the direction
+3. Good survey papers that give broad understanding
+
+Output as a JSON array of objects, each with:
+- "title": exact paper title
+- "area": which research area it belongs to
+- "why": one sentence on why this paper matters
+- "year": publication year
+
+Output ONLY the JSON array, no other text."""
 
 
 # ============ Daily Feed Checker ============
@@ -708,7 +1006,7 @@ def run_daily_check():
                 continue
             score = RelevanceScorer.score(paper, interests)
             paper['relevance_score'] = score
-            if score >= 0.3:
+            if score >= 0.2:
                 paper['source_type'] = 'arxiv'
                 new_discoveries.append(paper)
                 existing_urls.add(paper.get('url', ''))
@@ -730,7 +1028,7 @@ def run_daily_check():
                 continue
             score = RelevanceScorer.score(item, interests)
             item['relevance_score'] = score
-            if score >= 0.3:
+            if score >= 0.2:
                 item['source'] = feed_name
                 new_discoveries.append(item)
                 existing_urls.add(item.get('url', ''))

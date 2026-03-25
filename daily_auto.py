@@ -17,13 +17,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from retention import (
     SM2, CardGenerator, RelevanceScorer,
     load_review_state, load_all_papers, load_all_cards,
-    load_paper, save_cards, register_cards,
-    run_daily_check, cleanup_old_discoveries, cleanup_pdfs_for_mastered,
+    load_paper, load_interests, save_cards, register_cards,
+    run_daily_check, discover_via_semantic_scholar,
+    cleanup_old_discoveries, cleanup_pdfs_for_mastered,
     get_disk_usage, format_size,
 )
+from papers_cli import get_paper_id, save_yaml, PAPERS_DIR, ensure_dirs
 
 LOG_FILE = Path(__file__).parent / "daily.log"
-AUTO_GENERATE_THRESHOLD = 0.4  # Generate cards for papers with relevance >= this
+AUTO_GENERATE_THRESHOLD = 0.3  # Generate cards for papers with relevance >= this
+DAILY_CARD_LIMIT = 3  # Max papers to generate cards for per day (pacing)
 
 
 def log(msg):
@@ -46,26 +49,36 @@ def notify(title, message):
 
 
 def auto_generate_cards():
-    """Generate cards for papers that have none and are above relevance threshold."""
+    """Generate cards for top papers without cards. Paced to DAILY_CARD_LIMIT per day."""
     papers = load_all_papers()
     all_cards = load_all_cards()
     generated = 0
 
+    # Build candidates: papers without cards, sorted by priority
+    candidates = []
     for pid, paper in papers.items():
-        # Skip if already has cards
         if pid in all_cards:
             continue
-
-        # Skip low-relevance discovered papers
         status = paper.get('status', 'unread')
         relevance = paper.get('relevance_score', 0)
 
-        # Auto-generate for: manually added papers (any status) or high-relevance discoveries
+        # Manually added papers get high priority
         is_manual = status in ('unread', 'reading', 'read', 'queued')
         is_high_relevance = relevance >= AUTO_GENERATE_THRESHOLD
 
         if not (is_manual or is_high_relevance):
             continue
+
+        # Priority: manual papers first, then by relevance
+        priority = (1 if is_manual else 0, relevance)
+        candidates.append((pid, paper, priority))
+
+    # Sort: manual first, then highest relevance
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    # Limit to daily cap
+    candidates = candidates[:DAILY_CARD_LIMIT]
+
+    for pid, paper, _ in candidates:
 
         log(f"Auto-generating cards for: {paper.get('title', pid)[:60]}")
         related = [p for ppid, p in papers.items() if ppid != pid]
@@ -86,14 +99,57 @@ def auto_generate_cards():
 def main():
     log("=== Daily automation started ===")
 
-    # 1. Fetch new papers
-    log("Step 1: Checking arXiv feeds...")
+    # 1a. Fetch new papers from RSS/arXiv
+    log("Step 1a: Checking arXiv/RSS feeds...")
     try:
         new_papers = run_daily_check()
-        log(f"Found {len(new_papers)} new papers")
+        log(f"Found {len(new_papers)} papers from feeds")
     except Exception as e:
         log(f"Feed check failed: {e}")
         new_papers = []
+
+    # 1b. Smart discovery via Semantic Scholar
+    log("Step 1b: Semantic Scholar discovery...")
+    try:
+        interests = load_interests()
+        existing = load_all_papers()
+        existing_urls = {p.get('url', '') for p in existing.values()}
+
+        s2_papers = discover_via_semantic_scholar(interests, existing)
+        s2_added = 0
+        ensure_dirs()
+        for paper in s2_papers[:15]:  # Cap at 15 per day
+            if paper.get('url') in existing_urls:
+                continue
+            paper_id = get_paper_id(paper['title'], paper.get('year', 2025))
+            paper_path = PAPERS_DIR / f"{paper_id}.yaml"
+            if paper_path.exists():
+                continue
+            relevance = RelevanceScorer.score(paper, interests)
+            paper_data = {
+                'title': paper['title'],
+                'authors': paper.get('authors', []),
+                'year': paper.get('year'),
+                'abstract': paper.get('abstract', ''),
+                'summary': paper.get('summary', ''),
+                'url': paper.get('url'),
+                'status': 'discovered',
+                'source_type': 'semantic_scholar',
+                'discovery_reason': paper.get('discovery_reason', ''),
+                'citation_count': paper.get('citation_count', 0),
+                's2_id': paper.get('s2_id', ''),
+                'relevance_score': relevance,
+                'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            paper_data = {k: v for k, v in paper_data.items() if v is not None and v != '' and v != []}
+            save_yaml(paper_path, paper_data)
+            s2_added += 1
+            existing_urls.add(paper.get('url', ''))
+        log(f"Added {s2_added} papers from Semantic Scholar")
+        new_papers_count = len(new_papers) + s2_added
+    except Exception as e:
+        log(f"Semantic Scholar discovery failed: {e}")
+        new_papers_count = len(new_papers)
 
     # 2. Auto-generate cards
     log("Step 2: Auto-generating cards...")
@@ -108,15 +164,16 @@ def main():
     mastered = stats['mastered']
 
     # 4. Send notification
+    total_new = new_papers_count if 'new_papers_count' in dir() else len(new_papers)
     if due > 0:
         notify(
             "Knowledge Review",
-            f"{due} cards due today. {len(new_papers)} new papers found. Run: python3 papers_cli.py serve"
+            f"{due} cards due today. {total_new} new papers found. Run: python3 papers_cli.py serve"
         )
-    elif new_papers:
+    elif total_new > 0:
         notify(
             "New Papers Found",
-            f"{len(new_papers)} new papers discovered. No cards due today."
+            f"{total_new} new papers discovered. No cards due today."
         )
 
     # 5. Auto-cleanup
@@ -128,7 +185,8 @@ def main():
     usage = get_disk_usage()
     log(f"Disk: {format_size(usage['total'])} (pdfs: {format_size(usage['pdfs'])})")
 
-    log(f"Summary: {due} due, {total} total, {mastered} mastered, {len(new_papers)} new, {cards_generated} auto-carded")
+    total_new = new_papers_count if 'new_papers_count' in dir() else len(new_papers)
+    log(f"Summary: {due} due, {total} total, {mastered} mastered, {total_new} new, {cards_generated} auto-carded")
     log("=== Daily automation complete ===\n")
 
 

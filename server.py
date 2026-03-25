@@ -92,6 +92,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_review_due()
         elif path == "/api/review/stats":
             self.api_review_stats()
+        elif path == "/api/radio/playlist":
+            self.api_radio_playlist()
         elif path == "/api/papers":
             self.api_papers()
         elif path.startswith("/api/papers/"):
@@ -364,6 +366,81 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             yaml.dump(paper, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         json_response(self, {"ok": True, "status": new_status})
+
+    def api_radio_playlist(self):
+        """Generate a narrative playlist for passive audio learning.
+        Structured as mini-lectures per paper, not Q&A flashcards."""
+        papers = load_all_papers()
+        all_cards = load_all_cards()
+
+        segments = []
+
+        # 1. Paper deep-dives — intro + key ideas woven into narrative
+        for pid, p in papers.items():
+            if pid not in all_cards:
+                continue
+
+            title = p.get('title', 'Unknown')
+            summary = p.get('summary') or p.get('abstract', '')
+            cards = all_cards[pid].get('cards', [])
+
+            if not summary and not cards:
+                continue
+
+            # Opening: what is this paper about
+            intro = f"Let's talk about {title}. "
+            if summary:
+                intro += summary
+            segments.append({
+                "type": "summary",
+                "label": title[:55],
+                "text": intro,
+                "pause_after": 3,
+            })
+
+            # Key ideas: narrative style, not Q&A
+            for card in cards:
+                q = card.get('question', '')
+                a = card.get('answer', '')
+                ctype = card.get('type', 'concept')
+                if not q or not a:
+                    continue
+
+                prefixes = {
+                    'concept': "A key idea here:",
+                    'comparison': "To put this in context:",
+                    'application': "In practice,",
+                    'limitation': "It's worth noting that",
+                    'connection': "Interestingly,",
+                }
+                prefix = prefixes.get(ctype, "")
+                text = f"{prefix} {q} {a}"
+
+                segments.append({
+                    "type": ctype,
+                    "label": f"{ctype.title()} — {title[:40]}",
+                    "text": text,
+                    "pause_after": 3,
+                })
+
+        # 2. New discoveries — brief introductions
+        discovered = [(pid, p) for pid, p in papers.items() if p.get("status") == "discovered"]
+        discovered.sort(key=lambda x: x[1].get("relevance_score", 0), reverse=True)
+        for pid, p in discovered[:5]:
+            abstract = p.get("abstract", "")
+            if abstract:
+                segments.append({
+                    "type": "discovery",
+                    "label": f"New — {p.get('title', 'Unknown')[:50]}",
+                    "text": f"Here's a recently discovered paper: {p.get('title', 'Unknown')}. {abstract[:400]}",
+                    "pause_after": 3,
+                })
+
+        json_response(self, {
+            "segments": segments,
+            "total": len(segments),
+            "estimated_minutes": round(len(segments) * 0.4, 1),
+        })
 
     def api_tts(self):
         """Generate speech audio from text using edge-tts."""
