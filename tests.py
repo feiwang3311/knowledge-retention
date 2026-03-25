@@ -345,6 +345,70 @@ else:
     data, code = api_post("/api/tts", {"text": ""})
     test("empty TTS text → 400", code == 400)
 
+    # Topics
+    data, code = api_post("/api/topics", {"description": "test topic", "priority": "important"})
+    test("add topic → 200", code == 200 and data.get("ok"))
+    topic_id = data.get("id", "")
+
+    data, code = api_get("/api/topics")
+    test("get topics → 200", code == 200)
+    test("topic list contains added topic",
+         any(t.get("description") == "test topic" for t in data.get("topics", [])))
+
+    data, code = api_post("/api/topics", {"description": ""})
+    test("empty topic → 400", code == 400)
+
+    # Feedback
+    data, code = api_post("/api/feedback", {"paper_id": "test-id", "vote": "good"})
+    test("save feedback → 200", code == 200 and data.get("ok"))
+
+    data, code = api_post("/api/feedback", {})
+    test("feedback no paper_id → 400", code == 400)
+
+    # Radio playlist
+    data, code = api_get("/api/radio/playlist")
+    test("radio playlist → 200", code == 200)
+    test("radio has segments", "segments" in data)
+    test("radio has total", "total" in data)
+    if data.get("segments"):
+        seg = data["segments"][0]
+        test("segment has required fields",
+             all(k in seg for k in ["type", "label", "text", "pause_after"]))
+
+    # Papers have new fields
+    papers_resp, _ = api_get("/api/papers")
+    if papers_resp.get("papers"):
+        p = papers_resp["papers"][0]
+        test("paper has discovery_reason field", "discovery_reason" in p)
+        test("paper has citation_count field", "citation_count" in p)
+
+    # Cleanup test topic
+    if topic_id:
+        api_post_delete = urllib.request.Request(
+            f"{SERVER_URL}/api/topics/{topic_id}", method="DELETE")
+        try:
+            with urllib.request.urlopen(api_post_delete, timeout=5) as r:
+                pass
+        except Exception:
+            pass
+
+
+section("Semantic Scholar Helpers")
+
+from retention import _s2_paper_to_dict
+
+# Test citationCount: null handling
+test("citationCount null → 0",
+     _s2_paper_to_dict({"title": "Test", "citationCount": None, "authors": []}).get("citation_count") == 0)
+test("citationCount missing → 0",
+     _s2_paper_to_dict({"title": "Test", "authors": []}).get("citation_count") == 0)
+test("citationCount present → value",
+     _s2_paper_to_dict({"title": "T", "citationCount": 42, "authors": []}).get("citation_count") == 42)
+test("missing title → None",
+     _s2_paper_to_dict({}) is None)
+test("tldr null handled",
+     _s2_paper_to_dict({"title": "T", "authors": [], "tldr": None}) is not None)
+
 
 # ============================================================
 # Summary

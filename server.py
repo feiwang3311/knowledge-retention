@@ -35,8 +35,10 @@ PORT = int(os.environ.get("RETENTION_PORT", 8234))
 TTS_CACHE_DIR = BASE_DIR / ".tts_cache"
 TTS_VOICE = "en-US-AriaNeural"  # Natural-sounding Microsoft neural voice
 
-# Lock for review_state.json writes (thread safety)
+# Locks for thread safety
 _review_state_lock = threading.Lock()
+_feedback_lock = threading.Lock()
+_topics_lock = threading.Lock()
 
 
 def json_response(handler, data, status=200):
@@ -135,9 +137,6 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_add_topic()
         elif path == "/api/papers/add-url":
             self.api_add_paper_url()
-        elif path.startswith("/api/topics/"):
-            topic_id = path[len("/api/topics/"):]
-            self.api_delete_topic(topic_id)
         elif path.startswith("/api/cards/generate/"):
             paper_id = sanitize_paper_id(path[len("/api/cards/generate/"):])
             if not paper_id:
@@ -432,22 +431,26 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             json_response(self, {"error": "description required"}, 400)
             return
 
-        data = self._load_topics()
-        topic_id = f"topic-{len(data['topics']) + 1}-{int(datetime.now().timestamp())}"
-        data["topics"].append({
-            "id": topic_id,
-            "description": desc,
-            "priority": priority,
-            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
-        self._save_topics(data)
+        with _topics_lock:
+            data = self._load_topics()
+            topic_id = f"topic-{int(datetime.now().timestamp() * 1000)}"
+            data["topics"].append({
+                "id": topic_id,
+                "description": desc,
+                "priority": priority,
+                "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            self._save_topics(data)
         json_response(self, {"ok": True, "id": topic_id})
 
     def api_delete_topic(self, topic_id):
-        data = self._load_topics()
-        data["topics"] = [t for t in data["topics"] if t.get("id") != topic_id]
-        self._save_topics(data)
-        json_response(self, {"ok": True})
+        with _topics_lock:
+            data = self._load_topics()
+            before = len(data["topics"])
+            data["topics"] = [t for t in data["topics"] if t.get("id") != topic_id]
+            self._save_topics(data)
+        removed = before - len(data["topics"])
+        json_response(self, {"ok": True, "removed": removed})
 
     def api_save_feedback(self):
         body = read_body(self)
@@ -456,12 +459,13 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             json_response(self, {"error": "paper_id required"}, 400)
             return
 
-        fb = self._load_feedback()
-        if body.get("vote"):
-            fb["votes"][paper_id] = body["vote"]
-        if body.get("priority"):
-            fb["priorities"][paper_id] = body["priority"]
-        self._save_feedback(fb)
+        with _feedback_lock:
+            fb = self._load_feedback()
+            if body.get("vote"):
+                fb["votes"][paper_id] = body["vote"]
+            if body.get("priority"):
+                fb["priorities"][paper_id] = body["priority"]
+            self._save_feedback(fb)
         json_response(self, {"ok": True})
 
     def api_add_paper_url(self):
@@ -506,11 +510,13 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             if paper_path.exists():
                 json_response(self, {"error": "Already exists", "id": paper_id}, 400)
                 return
+            desc = (scraped['description'] or scraped['text'][:300] or '').strip()
             paper_data = {
                 'title': title,
+                'authors': [],
                 'year': datetime.now().year,
-                'abstract': scraped['description'] or scraped['text'][:300],
-                'summary': scraped['description'] or scraped['text'][:300],
+                'abstract': desc,
+                'summary': desc,
                 'url': url,
                 'status': 'queued',
                 'source_type': 'web',

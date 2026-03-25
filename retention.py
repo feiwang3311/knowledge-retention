@@ -543,10 +543,15 @@ def _s2_get(url, timeout=15):
             print("  Rate limited by Semantic Scholar, waiting 3s...")
             time.sleep(3)
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as response:
+                req2 = urllib.request.Request(url, headers={'User-Agent': 'KnowledgeRetention/1.0'})
+                if S2_API_KEY:
+                    req2.add_header("x-api-key", S2_API_KEY)
+                with urllib.request.urlopen(req2, timeout=timeout) as response:
                     return json.loads(response.read().decode('utf-8'))
             except Exception:
                 pass
+        else:
+            print(f"  S2 API HTTP {e.code}: {e.reason}")
         return None
     except Exception as e:
         print(f"  S2 API error: {e}")
@@ -592,7 +597,7 @@ def _s2_paper_to_dict(p):
         'abstract': p.get('abstract') or summary or '',
         'summary': summary or (p.get('abstract') or '')[:300],
         'url': url,
-        'citation_count': p.get('citationCount', 0),
+        'citation_count': p.get('citationCount') or 0,
         's2_id': p.get('paperId', ''),
         'source_type': 'semantic_scholar',
     }
@@ -703,16 +708,21 @@ def discover_via_semantic_scholar(interests=None, existing_papers=None):
     existing_s2_ids = {p.get('s2_id', '') for p in existing_papers.values() if p.get('s2_id')}
 
     all_discoveries = {}  # url -> paper dict (dedup)
+    seen_s2_ids = set(existing_s2_ids)
 
     def add_paper(paper):
         url = paper.get('url', '')
         s2_id = paper.get('s2_id', '')
-        if url in existing_urls or s2_id in existing_s2_ids:
+        if url and url in existing_urls:
             return
-        if url in all_discoveries:
+        if s2_id and s2_id in seen_s2_ids:
+            return
+        if url and url in all_discoveries:
             return
         if url:
             all_discoveries[url] = paper
+            if s2_id:
+                seen_s2_ids.add(s2_id)
 
     # 1. Semantic search for each project/topic
     print("  Semantic search...")
@@ -758,8 +768,10 @@ def discover_via_semantic_scholar(interests=None, existing_papers=None):
             add_paper(p)
         time.sleep(1)
 
-    # 3. Citation graph: find impactful papers citing our seeds
-    for pid, p in list(existing_papers.items())[:3]:  # Top 3 papers only
+    # 3. Citation graph: find impactful papers citing our top seeds
+    papers_by_cites = sorted(existing_papers.items(),
+                              key=lambda x: x[1].get('citation_count') or 0, reverse=True)
+    for pid, p in papers_by_cites[:3]:  # Top 3 by citation count
         url = p.get('url', '')
         arxiv_match = re.search(r'arxiv\.org/abs/(\d+\.\d+)', url)
         if arxiv_match:
@@ -791,7 +803,8 @@ def generate_seed_papers_prompt(interests):
 
     areas = []
     for p in projects:
-        areas.append(f"- {p['name']} (keywords: {', '.join(p.get('keywords', []))})")
+        name = p.get('name', 'Unknown')
+        areas.append(f"- {name} (keywords: {', '.join(p.get('keywords', []))})")
     for t in topics:
         areas.append(f"- {t}")
 
