@@ -617,11 +617,12 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         # Ensure cards are registered in review state
-        cards_data = load_cards(paper_id)
-        if cards_data:
-            count = register_cards(cards_data)
-        else:
-            count = 0
+        with _review_state_lock:
+            cards_data = load_cards(paper_id)
+            if cards_data:
+                count = register_cards(cards_data)
+            else:
+                count = 0
 
         json_response(self, {"ok": True, "cards_activated": count})
 
