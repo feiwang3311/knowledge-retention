@@ -754,6 +754,139 @@ header h1 { font-size: 20px; font-weight: 600; }
 .study-rating .rate-btn.unrelated { border-color: var(--red); }
 .study-rating .rate-btn.unrelated:hover { background: var(--red); color: white; }
 
+/* Explorations */
+.exploration-thread {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.exploration-header {
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.1s;
+}
+
+.exploration-header:hover { background: var(--surface2); }
+.exploration-header .title { font-weight: 600; font-size: 15px; }
+.exploration-header .meta { font-size: 12px; color: var(--text-dim); }
+
+.exploration-body { padding: 0 16px 16px; }
+
+.exploration-qa {
+  border-left: 3px solid var(--accent);
+  padding: 12px 16px;
+  margin: 12px 0;
+  background: var(--surface2);
+  border-radius: 0 8px 8px 0;
+}
+
+.exploration-qa .question {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
+
+.exploration-qa .answer {
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.exploration-qa .papers-used {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.exploration-qa .paper-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-dim);
+}
+
+.exploration-qa .paper-chip.discovered {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.follow-up-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.follow-up-btn {
+  padding: 6px 12px;
+  border: 1px dashed var(--border);
+  background: none;
+  color: var(--text-dim);
+  border-radius: 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.follow-up-btn:hover { border-color: var(--accent); color: var(--text); border-style: solid; }
+
+.exploration-cards {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.exploration-cards .mini-card {
+  padding: 8px 12px;
+  background: var(--surface);
+  border-radius: 6px;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.exploration-cards .mini-card .q { font-weight: 500; }
+.exploration-cards .mini-card .a { color: var(--text-dim); margin-top: 2px; }
+
+.explore-ask-box {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.explore-ask-box input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.uncategorized-section {
+  margin-top: 24px;
+}
+
+.uncategorized-header {
+  font-size: 14px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
 /* Loading */
 .loading { text-align: center; padding: 32px; color: var(--text-dim); }
 
@@ -808,7 +941,7 @@ header h1 { font-size: 20px; font-weight: 600; }
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="review">Review</button>
       <button class="tab" data-tab="radio">Radio</button>
-      <button class="tab" data-tab="discover">Discover</button>
+      <button class="tab" data-tab="explore">Explore</button>
       <button class="tab" data-tab="papers">Papers</button>
     </div>
   </header>
@@ -832,26 +965,13 @@ header h1 { font-size: 20px; font-weight: 600; }
     <div class="review-container" id="review-area"></div>
   </div>
 
-  <!-- Discover -->
-  <div id="discover" class="tab-content">
+  <!-- Explore -->
+  <div id="explore" class="tab-content">
     <div class="discover-add-bar">
-      <input type="text" id="add-input" placeholder="Paste a URL or describe a topic you want to learn about..." onkeydown="if(event.key==='Enter')addItem()">
-      <select id="add-type">
-        <option value="auto">Auto-detect</option>
-        <option value="topic">Topic</option>
-      </select>
-      <select id="add-priority">
-        <option value="relevant">Relevant</option>
-        <option value="important">Important</option>
-        <option value="hobby">Hobby</option>
-      </select>
-      <button class="btn primary" onclick="addItem()">Add</button>
+      <input type="text" id="explore-input" placeholder="Ask a question, paste a URL, or describe what you want to learn..." onkeydown="if(event.key==='Enter')submitExplore()">
+      <button class="btn primary" onclick="submitExplore()">Explore</button>
     </div>
-
-    <div id="topics-section"></div>
-
-    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 12px;">Papers to Study</h3>
-    <div id="discover-list"></div>
+    <div id="explore-content"></div>
   </div>
 
   <!-- Radio -->
@@ -995,7 +1115,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'dashboard') loadDashboard();
     if (tab.dataset.tab === 'papers') loadPapers();
     if (tab.dataset.tab === 'review') showReviewStart();
-    if (tab.dataset.tab === 'discover') loadDiscover();
+    if (tab.dataset.tab === 'explore') loadExplore();
     if (tab.dataset.tab === 'radio' && !radioState.playlist) loadRadio();
   });
 });
@@ -1475,100 +1595,246 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ---- Discover Tab ----
+// ---- Explore Tab ----
 
-let discoverData = null;
+let explorationsData = null;
 let studyingPaper = null;
 
-async function loadDiscover() {
-  const papersResp = await api('/api/papers');
-  // Show unread papers that haven't been studied yet (discovered, queued, unread)
-  const unread = (papersResp.papers || [])
-    .filter(p => ['discovered', 'queued', 'unread'].includes(p.status))
-    .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0));
-  discoverData = unread;
+async function loadExplore() {
+  const el = document.getElementById('explore-content');
+  el.innerHTML = '<div class="loading">Loading...</div>';
 
-  const topicsResp = await api('/api/topics');
-  renderDiscoverMain();
-  renderTopics(topicsResp.topics || []);
+  const [expResp, papersResp] = await Promise.all([
+    api('/api/explorations'),
+    api('/api/papers'),
+  ]);
+
+  explorationsData = expResp.explorations || [];
+
+  // Get uncategorized papers (discovered, not linked to any exploration)
+  const allExpPaperIds = new Set();
+  explorationsData.forEach(exp => {
+    exp.questions.forEach(q => {
+      (q.papers_used || []).forEach(id => allExpPaperIds.add(id));
+      (q.papers_discovered || []).forEach(d => allExpPaperIds.add(d.id));
+    });
+  });
+
+  const uncategorized = (papersResp.papers || [])
+    .filter(p => ['discovered', 'queued', 'unread'].includes(p.status) && !allExpPaperIds.has(p.id))
+    .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0));
+
+  renderExploreContent(uncategorized);
 }
 
-function renderDiscoverMain() {
-  const el = document.getElementById('discover-list');
-  if (!discoverData || discoverData.length === 0) {
-    el.innerHTML = '<div class="empty-state">No unread papers. Run <code>python3 papers_cli.py discover</code> to find more.</div>';
-    return;
+function renderExploreContent(uncategorized) {
+  const el = document.getElementById('explore-content');
+
+  let html = '';
+
+  // Explorations
+  if (explorationsData.length > 0) {
+    html += explorationsData.map(renderExploration).join('');
+  } else {
+    html += '<div class="empty-state" style="padding: 24px;">Ask a question to start exploring. Try: "How is LLaMA different from DeepSeek and Qwen?"</div>';
   }
 
-  el.innerHTML = discoverData.map(p => {
-    const cites = p.citation_count ? `${p.citation_count} cites` : '';
-    return `
-    <div class="discover-card" id="disc-${p.id}">
-      <div class="title">${p.title}</div>
-      <div class="meta">
-        ${p.year || '?'} · ${(p.authors || []).slice(0, 3).join(', ')}${(p.authors||[]).length > 3 ? ' et al.' : ''}
-        ${cites ? ` · ${cites}` : ''}
-        ${p.card_count > 0 ? ` · ${p.card_count} cards` : ''}
+  // Uncategorized papers
+  if (uncategorized.length > 0) {
+    html += `
+      <div class="uncategorized-section">
+        <div class="uncategorized-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? '' : 'none'">
+          Uncategorized Papers (${uncategorized.length}) ▾
+        </div>
+        <div>
+          ${uncategorized.slice(0, 20).map(p => `
+            <div class="discover-card">
+              <div class="title">${p.title}</div>
+              <div class="meta">${p.year || '?'} ${p.citation_count ? '· ' + p.citation_count + ' cites' : ''}</div>
+              <div class="discover-actions" style="margin-top: 8px;">
+                <button class="btn" onclick="startStudy('${p.id}')">Study</button>
+                <button class="vote-btn bad" onclick="removePaper('${p.id}')" title="Remove">x</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
       </div>
-      ${p.discovery_reason ? `<div class="reason">${p.discovery_reason}</div>` : ''}
-      <div class="discover-actions">
-        <button class="btn primary" onclick="startStudy('${p.id}')">Study</button>
-        <select class="priority-select" onchange="ratePaper('${p.id}', this.value)">
-          <option value="" disabled selected>Rate...</option>
-          <option value="important">Important</option>
-          <option value="relevant">Relevant</option>
-          <option value="hobby">Hobby</option>
-          <option value="unrelated">Unrelated (remove)</option>
-        </select>
-        <button class="vote-btn bad" onclick="removePaper('${p.id}')" title="Remove">x</button>
+    `;
+  }
+
+  el.innerHTML = html;
+}
+
+function renderExploration(exp) {
+  const qCount = exp.questions.length;
+  const paperCount = new Set(exp.questions.flatMap(q => [...(q.papers_used || []), ...(q.papers_discovered || []).map(d => d.id)])).size;
+
+  return `
+    <div class="exploration-thread" id="exp-${exp.id}">
+      <div class="exploration-header" onclick="toggleExploration('${exp.id}')">
+        <span class="title">${exp.title}</span>
+        <span class="meta">${qCount} Q&A · ${paperCount} papers · ${exp.created_at?.split(' ')[0] || ''}</span>
+      </div>
+      <div class="exploration-body" id="expbody-${exp.id}" style="display: none;">
+        ${exp.questions.map(renderQuestionNode).join('')}
+
+        <div class="explore-ask-box">
+          <input type="text" placeholder="Ask a follow-up question..." id="followup-${exp.id}" onkeydown="if(event.key==='Enter')askFollowUp('${exp.id}')">
+          <button class="btn primary" onclick="askFollowUp('${exp.id}')">Ask</button>
+          <button class="vote-btn bad" onclick="if(confirm('Delete this exploration?')){deleteExploration('${exp.id}')}" title="Delete">x</button>
+        </div>
       </div>
     </div>
-  `}).join('');
+  `;
 }
 
-async function ratePaper(paperId, rating) {
-  if (rating === 'unrelated') {
-    removePaper(paperId);
+function renderQuestionNode(q) {
+  return `
+    <div class="exploration-qa">
+      <div class="question">${q.text}</div>
+      <div class="answer">${q.answer}</div>
+
+      <div class="audio-controls" style="margin-top: 8px;">
+        <button class="audio-btn" onclick="tts.toggle('${q.answer.replace(/'/g, "\\'").replace(/\n/g, " ").substring(0, 500)}')" style="font-size: 11px;">&#9654; Listen</button>
+      </div>
+
+      ${(q.papers_used || []).length > 0 || (q.papers_discovered || []).length > 0 ? `
+        <div class="papers-used">
+          ${(q.papers_used || []).map(pid => `<span class="paper-chip" title="${pid}">${pid.substring(0, 35)}...</span>`).join('')}
+          ${(q.papers_discovered || []).map(d => `<span class="paper-chip discovered" title="Newly discovered">${d.title?.substring(0, 30) || d.id}...</span>`).join('')}
+        </div>
+      ` : ''}
+
+      ${(q.follow_ups || []).length > 0 ? `
+        <div class="follow-up-btns">
+          ${q.follow_ups.map(fu => `<button class="follow-up-btn" onclick="askFromFollowUp(this, '${fu.replace(/'/g, "\\'")}')">${fu}</button>`).join('')}
+        </div>
+      ` : ''}
+
+      ${(q.cards || []).length > 0 ? `
+        <div class="exploration-cards">
+          ${q.cards.map(c => `
+            <div class="mini-card">
+              <div class="q">Q: ${c.question}</div>
+              <div class="a">A: ${c.answer}</div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function toggleExploration(expId) {
+  const body = document.getElementById(`expbody-${expId}`);
+  body.style.display = body.style.display === 'none' ? '' : 'none';
+}
+
+async function submitExplore() {
+  const input = document.getElementById('explore-input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  // Check if it's a URL
+  if (text.startsWith('http')) {
+    const result = await api('/api/papers/add-url', {
+      method: 'POST',
+      body: JSON.stringify({ url: text }),
+    });
+    if (result.ok) {
+      toast(`Paper added: ${result.title || 'OK'}`);
+      input.value = '';
+      loadExplore();
+    } else {
+      toast(result.error || 'Failed', 'error');
+    }
     return;
   }
-  await api('/api/feedback', {
+
+  // It's a question — create new exploration
+  input.disabled = true;
+  input.value = 'Thinking...';
+
+  const result = await api('/api/explorations', {
     method: 'POST',
-    body: JSON.stringify({ paper_id: paperId, priority: rating }),
+    body: JSON.stringify({ question: text }),
   });
-  toast(`Rated as ${rating}`);
+
+  input.disabled = false;
+  input.value = '';
+
+  if (result.ok) {
+    toast('Exploration created');
+    loadExplore();
+    // Auto-expand the new exploration
+    setTimeout(() => {
+      const body = document.getElementById(`expbody-${result.exploration.id}`);
+      if (body) body.style.display = '';
+    }, 100);
+  } else {
+    toast(result.error || 'Failed', 'error');
+  }
 }
 
-async function removePaper(paperId) {
-  await api(`/api/papers/${paperId}/delete`, { method: 'POST' });
-  const card = document.getElementById(`disc-${paperId}`);
-  if (card) card.style.display = 'none';
-  discoverData = discoverData.filter(p => p.id !== paperId);
-  toast('Paper removed');
+async function askFollowUp(expId) {
+  const input = document.getElementById(`followup-${expId}`);
+  const question = input.value.trim();
+  if (!question) return;
+
+  input.disabled = true;
+  input.value = 'Thinking...';
+
+  const result = await api('/api/explorations/ask', {
+    method: 'POST',
+    body: JSON.stringify({ exploration_id: expId, question }),
+  });
+
+  input.disabled = false;
+  input.value = '';
+
+  if (result.ok) {
+    loadExplore();
+    setTimeout(() => {
+      const body = document.getElementById(`expbody-${expId}`);
+      if (body) body.style.display = '';
+    }, 100);
+  } else {
+    toast(result.error || 'Failed', 'error');
+  }
 }
 
+function askFromFollowUp(btn, question) {
+  // Find the parent exploration
+  const thread = btn.closest('.exploration-thread');
+  if (!thread) return;
+  const expId = thread.id.replace('exp-', '');
+  const input = document.getElementById(`followup-${expId}`);
+  if (input) {
+    input.value = question;
+    askFollowUp(expId);
+  }
+}
+
+async function deleteExploration(expId) {
+  await api(`/api/explorations/${expId}/delete`, { method: 'POST' });
+  loadExplore();
+}
+
+// Keep startStudy and related functions for the study flow
 async function startStudy(paperId) {
-  const discoverContent = document.getElementById('discover-list');
-  const topicsSection = document.getElementById('topics-section');
-  const addBar = document.querySelector('.discover-add-bar');
-  const addLabel = document.querySelector('#discover h3');
+  // Switch to the explore tab content area for study view
+  const el = document.getElementById('explore-content');
+  el.innerHTML = '<div class="loading">Loading study session...</div>';
 
-  // Hide discover list, show study view
-  discoverContent.innerHTML = '<div class="loading">Loading study session...</div>';
-  if (topicsSection) topicsSection.style.display = 'none';
-  if (addBar) addBar.style.display = 'none';
-  if (addLabel) addLabel.style.display = 'none';
-
-  // Generate cards if needed
   const paperResp = await api(`/api/papers/${paperId}`);
-  if (!paperResp.cards || paperResp.cards.cards?.length === 0) {
-    discoverContent.innerHTML = '<div class="loading">Generating knowledge cards... (this takes ~30s)</div>';
+  if (!paperResp.cards || paperResp.cards?.cards?.length === 0) {
+    el.innerHTML = '<div class="loading">Generating knowledge cards... (this takes ~30s)</div>';
     await api(`/api/cards/generate/${paperId}`, { method: 'POST' });
   }
 
-  // Load study session
   const study = await api(`/api/study/${paperId}`);
   studyingPaper = study;
-  renderStudyView(discoverContent, study);
+  renderStudyView(el, study);
 }
 
 function renderStudyView(el, study) {
@@ -1666,74 +1932,16 @@ async function completeStudy(paperId) {
 function exitStudy() {
   studyingPaper = null;
   tts.stop();
-  // Re-show everything
-  const topicsSection = document.getElementById('topics-section');
-  const addBar = document.querySelector('.discover-add-bar');
-  const addLabel = document.querySelector('#discover h3');
-  if (topicsSection) topicsSection.style.display = '';
-  if (addBar) addBar.style.display = '';
-  if (addLabel) addLabel.style.display = '';
-  loadDiscover();
+  loadExplore();
 }
 
-function renderTopics(topics) {
-  const el = document.getElementById('topics-section');
-  if (!topics.length) {
-    el.innerHTML = '';
-    return;
-  }
-  el.innerHTML = `
-    <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Your Topics</h3>
-    <div class="topic-list">
-      ${topics.map(t => `
-        <div class="topic-item">
-          <span>${t.description}</span>
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <span class="topic-priority ${t.priority}">${t.priority}</span>
-            <button class="vote-btn bad" onclick="removeTopic('${t.id}')" style="padding: 4px 8px;">x</button>
-          </div>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
+// renderStudyView, ratePaperDuring, completeStudy, exitStudy — keep these as-is but
+// change exitStudy to call loadExplore() instead of loadDiscover()
 
-async function addItem() {
-  const input = document.getElementById('add-input');
-  const type = document.getElementById('add-type').value;
-  const priority = document.getElementById('add-priority').value;
-  const text = input.value.trim();
-  if (!text) return;
-
-  input.disabled = true;
-
-  if (type === 'topic' || (type === 'auto' && !text.startsWith('http'))) {
-    await api('/api/topics', {
-      method: 'POST',
-      body: JSON.stringify({ description: text, priority }),
-    });
-    toast('Topic added');
-    input.value = '';
-    loadDiscover();
-  } else {
-    const result = await api('/api/papers/add-url', {
-      method: 'POST',
-      body: JSON.stringify({ url: text, priority }),
-    });
-    if (result.ok) {
-      toast(`Paper added: ${result.title || 'OK'}`);
-      input.value = '';
-      loadDiscover();
-    } else {
-      toast(result.error || 'Failed to add', 'error');
-    }
-  }
-  input.disabled = false;
-}
-
-async function removeTopic(topicId) {
-  await api(`/api/topics/${topicId}`, { method: 'DELETE' });
-  loadDiscover();
+async function removePaper(paperId) {
+  await api(`/api/papers/${paperId}/delete`, { method: 'POST' });
+  toast('Paper removed');
+  loadExplore();
 }
 
 // ---- Knowledge Radio ----

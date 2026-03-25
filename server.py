@@ -26,6 +26,7 @@ from retention import (
     load_review_state, save_review_state, load_cards, save_cards,
     load_all_cards, load_paper, load_all_papers, load_interests,
     register_cards, run_daily_check, get_studied_paper_ids,
+    load_explorations, save_explorations, answer_question,
 )
 
 import yaml
@@ -39,6 +40,7 @@ TTS_VOICE = "en-US-AriaNeural"  # Natural-sounding Microsoft neural voice
 _review_state_lock = threading.Lock()
 _feedback_lock = threading.Lock()
 _topics_lock = threading.Lock()
+_explorations_lock = threading.Lock()
 
 
 def json_response(handler, data, status=200):
@@ -100,6 +102,8 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_papers()
         elif path == "/api/topics":
             self.api_get_topics()
+        elif path == "/api/explorations":
+            self.api_get_explorations()
         elif path.startswith("/api/study/"):
             paper_id = sanitize_paper_id(path[len("/api/study/"):])
             if not paper_id:
@@ -141,6 +145,13 @@ class RetentionHandler(SimpleHTTPRequestHandler):
             self.api_save_feedback()
         elif path == "/api/topics":
             self.api_add_topic()
+        elif path == "/api/explorations":
+            self.api_create_exploration()
+        elif path == "/api/explorations/ask":
+            self.api_exploration_ask()
+        elif path.startswith("/api/explorations/") and path.endswith("/delete"):
+            exp_id = path[len("/api/explorations/"):-len("/delete")]
+            self.api_delete_exploration(exp_id)
         elif path == "/api/papers/add-url":
             self.api_add_paper_url()
         elif path.startswith("/api/study/") and path.endswith("/complete"):
@@ -638,6 +649,133 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 save_review_state(state)
 
         json_response(self, {"ok": True, "removed_cards": len(to_remove)})
+
+    # ---- Explorations ----
+
+    def api_get_explorations(self):
+        data = load_explorations()
+        json_response(self, data)
+
+    def api_create_exploration(self):
+        body = read_body(self)
+        question = body.get("question", "").strip()
+        if not question:
+            json_response(self, {"error": "question required"}, 400)
+            return
+
+        exp_id = f"exp-{int(datetime.now().timestamp() * 1000)}"
+
+        # Answer the question
+        result = answer_question(question)
+
+        q_id = f"q-{int(datetime.now().timestamp() * 1000)}"
+        question_node = {
+            "id": q_id,
+            "text": question,
+            "answer": result["answer"],
+            "papers_used": result["papers_used"],
+            "papers_discovered": result["papers_discovered"],
+            "follow_ups": result["follow_ups"],
+            "cards": result["cards"],
+            "asked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # Generate title from the question (first ~50 chars or the question itself)
+        title = question[:60] + ("..." if len(question) > 60 else "")
+
+        exploration = {
+            "id": exp_id,
+            "title": title,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "questions": [question_node],
+        }
+
+        with _explorations_lock:
+            data = load_explorations()
+            data["explorations"].insert(0, exploration)  # newest first
+            save_explorations(data)
+
+        # Save generated cards to the relevant papers
+        if result["cards"]:
+            self._save_exploration_cards(exp_id, result["cards"], result["papers_used"])
+
+        json_response(self, {"ok": True, "exploration": exploration})
+
+    def api_exploration_ask(self):
+        body = read_body(self)
+        exp_id = body.get("exploration_id")
+        question = body.get("question", "").strip()
+        if not exp_id or not question:
+            json_response(self, {"error": "exploration_id and question required"}, 400)
+            return
+
+        # Build context from previous questions in this exploration
+        data = load_explorations()
+        exp = next((e for e in data["explorations"] if e["id"] == exp_id), None)
+        if not exp:
+            json_response(self, {"error": "Exploration not found"}, 404)
+            return
+
+        prev_context = "\n".join(
+            f"Q: {q['text']}\nA: {q['answer'][:300]}"
+            for q in exp["questions"][-3:]  # last 3 Q&As for context
+        )
+
+        result = answer_question(question, exploration_context=prev_context)
+
+        q_id = f"q-{int(datetime.now().timestamp() * 1000)}"
+        question_node = {
+            "id": q_id,
+            "text": question,
+            "answer": result["answer"],
+            "papers_used": result["papers_used"],
+            "papers_discovered": result["papers_discovered"],
+            "follow_ups": result["follow_ups"],
+            "cards": result["cards"],
+            "asked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        with _explorations_lock:
+            data = load_explorations()
+            exp = next((e for e in data["explorations"] if e["id"] == exp_id), None)
+            if exp:
+                exp["questions"].append(question_node)
+                save_explorations(data)
+
+        if result["cards"]:
+            self._save_exploration_cards(exp_id, result["cards"], result["papers_used"])
+
+        json_response(self, {"ok": True, "question": question_node})
+
+    def api_delete_exploration(self, exp_id):
+        with _explorations_lock:
+            data = load_explorations()
+            data["explorations"] = [e for e in data["explorations"] if e["id"] != exp_id]
+            save_explorations(data)
+        json_response(self, {"ok": True})
+
+    def _save_exploration_cards(self, exp_id, cards, paper_ids):
+        """Save cards generated from exploration to the first relevant paper's card file."""
+        if not cards or not paper_ids:
+            return
+        paper_id = paper_ids[0]  # Attach to the primary paper
+        existing = load_cards(paper_id)
+        if existing is None:
+            existing = {"paper_id": paper_id, "generated_at": datetime.now().isoformat(), "cards": []}
+
+        for i, card in enumerate(cards):
+            card_id = f"exp-{exp_id[-8:]}-{i+1:02d}"
+            existing["cards"].append({
+                "id": card_id,
+                "type": card.get("type", "exploration"),
+                "question": card["question"],
+                "answer": card["answer"],
+                "difficulty": 2,
+                "source": f"exploration:{exp_id}",
+            })
+
+        save_cards(paper_id, existing)
+        register_cards(existing)
 
     def api_radio_playlist(self):
         """Generate a narrative playlist for passive audio learning.

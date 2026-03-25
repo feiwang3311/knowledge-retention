@@ -1108,6 +1108,214 @@ def run_daily_check():
     return new_discoveries
 
 
+# ============ Explorations ============
+
+EXPLORATIONS_FILE = BASE_DIR / "explorations.json"
+
+def load_explorations():
+    if EXPLORATIONS_FILE.exists():
+        try:
+            with open(EXPLORATIONS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"explorations": []}
+
+def save_explorations(data):
+    with open(EXPLORATIONS_FILE, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def answer_question(question, exploration_context=None):
+    """Answer a question using the paper library + Semantic Scholar + LLM.
+
+    Returns dict with:
+    - answer: string
+    - papers_used: list of paper_ids from library that were used as context
+    - papers_discovered: list of new papers found and added (as dicts with id, title, url)
+    - follow_ups: list of suggested follow-up questions
+    - cards: list of generated cards (question/answer dicts)
+    """
+    import time
+
+    papers = load_all_papers()
+    all_cards = load_all_cards()
+
+    # 1. Find relevant papers in library by keyword matching
+    q_lower = question.lower()
+    q_words = set(re.sub(r'[^\w\s]', '', q_lower).split())
+    # Remove common words
+    stop_words = {'the','a','an','is','are','was','were','how','what','why','which','does','do','and','or','in','on','of','to','for','with','from','by','about','between','this','that','these','those','it','its','can','could','would','should','has','have','had'}
+    q_words -= stop_words
+
+    relevant = []
+    for pid, p in papers.items():
+        searchable = ' '.join([
+            p.get('title', ''),
+            p.get('abstract', '') or '',
+            p.get('summary', '') or '',
+            ' '.join(p.get('tags', [])),
+        ]).lower()
+
+        matches = sum(1 for w in q_words if w in searchable)
+        if matches >= 1:
+            relevant.append((pid, p, matches))
+
+    relevant.sort(key=lambda x: x[2], reverse=True)
+    relevant_papers = [(pid, p) for pid, p, _ in relevant[:8]]
+    papers_used = [pid for pid, _ in relevant_papers]
+
+    # 2. If we have fewer than 3 relevant papers, search Semantic Scholar
+    papers_discovered = []
+    if len(relevant_papers) < 3:
+        try:
+            s2_results = s2_semantic_search(question, year_from=2020, limit=5)
+            time.sleep(1)
+
+            existing_urls = {p.get('url', '') for p in papers.values()}
+
+            for s2_paper in s2_results[:3]:
+                if s2_paper.get('url') in existing_urls:
+                    continue
+                # Add to library
+                from papers_cli import get_paper_id, save_yaml, PAPERS_DIR
+                PAPERS_DIR.mkdir(exist_ok=True)
+                new_id = get_paper_id(s2_paper['title'], s2_paper.get('year', 2025))
+                paper_path = PAPERS_DIR / f"{new_id}.yaml"
+                if paper_path.exists():
+                    continue
+
+                paper_data = {
+                    'title': s2_paper['title'],
+                    'authors': s2_paper.get('authors', []),
+                    'year': s2_paper.get('year'),
+                    'abstract': s2_paper.get('abstract', ''),
+                    'summary': s2_paper.get('summary', ''),
+                    'url': s2_paper.get('url', ''),
+                    'status': 'discovered',
+                    'source_type': 'semantic_scholar',
+                    'discovery_reason': f'exploration: {question[:50]}',
+                    'citation_count': s2_paper.get('citation_count', 0),
+                    's2_id': s2_paper.get('s2_id', ''),
+                    'added_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                paper_data = {k: v for k, v in paper_data.items() if v is not None and v != '' and v != []}
+                save_yaml(paper_path, paper_data)
+
+                papers_discovered.append({
+                    'id': new_id,
+                    'title': s2_paper['title'],
+                    'url': s2_paper.get('url', ''),
+                })
+
+                # Also use as context
+                relevant_papers.append((new_id, paper_data))
+                papers_used.append(new_id)
+                existing_urls.add(s2_paper.get('url', ''))
+        except Exception as e:
+            print(f"S2 search during exploration failed: {e}")
+
+    # 3. Build context for LLM
+    context_parts = []
+    for pid, p in relevant_papers[:6]:
+        part = f"Paper: {p.get('title', 'Unknown')} ({p.get('year', '?')})\n"
+        part += f"Abstract: {p.get('abstract', '') or p.get('summary', '')}\n"
+
+        # Include cards if available
+        paper_cards = all_cards.get(pid, {}).get('cards', [])
+        if paper_cards:
+            part += "Key points:\n"
+            for c in paper_cards[:5]:
+                part += f"- {c.get('question', '')}: {c.get('answer', '')}\n"
+        context_parts.append(part)
+
+    # Add exploration context if provided
+    if exploration_context:
+        context_parts.append(f"Previous questions in this exploration:\n{exploration_context}")
+
+    context = "\n---\n".join(context_parts)
+
+    prompt = f"""You are a research assistant helping a user understand academic papers. Answer the question using the paper context provided. Use plain language and analogies — the user prefers intuitive explanations over math notation.
+
+CONTEXT FROM USER'S PAPER LIBRARY:
+{context}
+
+USER'S QUESTION:
+{question}
+
+Provide:
+1. A clear, detailed answer (use the paper context, cite papers by name when relevant)
+2. After your answer, on a new line write "FOLLOW_UPS:" followed by 3 suggested follow-up questions (one per line, prefixed with "- ")
+3. After follow-ups, on a new line write "CARDS:" followed by 2-3 knowledge cards in this format (one per line):
+   Q: [question] | A: [answer]
+
+Be thorough but accessible. If the papers don't fully answer the question, say what's missing and what additional reading would help."""
+
+    # 4. Call Claude
+    answer_text = ""
+    follow_ups = []
+    cards = []
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            raw = result.stdout.strip()
+
+            # Parse sections
+            answer_text = raw
+            follow_ups_text = ""
+            cards_text = ""
+
+            if "FOLLOW_UPS:" in raw:
+                parts = raw.split("FOLLOW_UPS:", 1)
+                answer_text = parts[0].strip()
+                remainder = parts[1]
+                if "CARDS:" in remainder:
+                    fu_part, cards_text = remainder.split("CARDS:", 1)
+                    follow_ups_text = fu_part.strip()
+                    cards_text = cards_text.strip()
+                else:
+                    follow_ups_text = remainder.strip()
+            elif "CARDS:" in raw:
+                answer_text, cards_text = raw.split("CARDS:", 1)
+                answer_text = answer_text.strip()
+                cards_text = cards_text.strip()
+
+            # Parse follow-ups
+            for line in follow_ups_text.split('\n'):
+                line = line.strip()
+                if line.startswith('- '):
+                    follow_ups.append(line[2:].strip())
+                elif line and not line.startswith('CARDS'):
+                    follow_ups.append(line.strip())
+            follow_ups = follow_ups[:5]
+
+            # Parse cards
+            for line in cards_text.split('\n'):
+                line = line.strip()
+                if line.startswith('Q:') and '|' in line and 'A:' in line:
+                    q_part, a_part = line.split('|', 1)
+                    q = q_part.replace('Q:', '').strip()
+                    a = a_part.replace('A:', '').strip()
+                    if q and a:
+                        cards.append({"question": q, "answer": a, "type": "exploration"})
+        else:
+            answer_text = f"Failed to generate answer: {result.stderr[:200]}"
+    except Exception as e:
+        answer_text = f"Error generating answer: {str(e)}"
+
+    return {
+        "answer": answer_text,
+        "papers_used": papers_used,
+        "papers_discovered": papers_discovered,
+        "follow_ups": follow_ups,
+        "cards": cards,
+    }
+
+
 # ============ Register Cards in Review State ============
 
 def register_cards(cards_data):

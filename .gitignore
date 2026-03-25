@@ -14,4 +14,5 @@ connections.yaml
 daily.log
 feedback.json
 topics.json
+explorations.json
 .tts_cache/
