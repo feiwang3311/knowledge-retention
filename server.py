@@ -316,6 +316,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         papers = load_all_papers()
         all_cards = load_all_cards()
         state = load_review_state()
+        fb = self._load_feedback()
 
         today = datetime.now().strftime("%Y-%m-%d")
         result = []
@@ -339,6 +340,7 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 "relevance_score": p.get("relevance_score"),
                 "discovery_reason": p.get("discovery_reason", ""),
                 "citation_count": p.get("citation_count"),
+                "priority": p.get("priority", fb.get("priorities", {}).get(pid, "")),
                 "added_at": p.get("added_at"),
             })
 
@@ -793,12 +795,15 @@ class RetentionHandler(SimpleHTTPRequestHandler):
         papers = load_all_papers()
         all_cards = load_all_cards()
         studied = get_studied_paper_ids(papers)
+        fb = self._load_feedback()
+        priority_order = {"important": 0, "relevant": 1, "hobby": 2, "": 3}
         available = []
         for pid, p in papers.items():
             summary = p.get('summary') or p.get('abstract', '')
             if not summary:
-                continue  # Skip papers with no content at all
+                continue
             card_count = len(all_cards.get(pid, {}).get('cards', []))
+            priority = p.get("priority") or fb.get("priorities", {}).get(pid, "")
             available.append({
                 "id": pid,
                 "title": p.get("title", "Unknown"),
@@ -806,9 +811,14 @@ class RetentionHandler(SimpleHTTPRequestHandler):
                 "categories": p.get("categories", []),
                 "status": p.get("status", "unknown"),
                 "studied": pid in studied,
+                "priority": priority,
             })
-        # Sort: studied first, then by citation count
-        available.sort(key=lambda x: (not x["studied"], -(papers.get(x["id"], {}).get("citation_count") or 0)))
+        # Sort: important first, then studied, then by citation count
+        available.sort(key=lambda x: (
+            priority_order.get(x.get("priority", ""), 3),
+            not x["studied"],
+            -(papers.get(x["id"], {}).get("citation_count") or 0)
+        ))
         json_response(self, {"papers": available})
 
     def api_radio_playlist(self):
