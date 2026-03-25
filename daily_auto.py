@@ -7,6 +7,7 @@ Run via launchd or cron. Does everything automatically:
 3. Send macOS notification with review summary
 """
 
+import json
 import subprocess
 import sys
 from datetime import datetime
@@ -164,6 +165,8 @@ def main():
         log(f"Feed check failed: {e}")
         new_papers = []
 
+    new_papers_count = len(new_papers)
+
     # 1b. Smart discovery via Semantic Scholar
     log("Step 1b: Semantic Scholar discovery...")
     try:
@@ -220,7 +223,7 @@ def main():
     mastered = stats['mastered']
 
     # 4. Send notification
-    total_new = new_papers_count if 'new_papers_count' in dir() else len(new_papers)
+    total_new = new_papers_count
     if due > 0:
         notify(
             "Knowledge Review",
@@ -247,7 +250,7 @@ def main():
     usage = get_disk_usage()
     log(f"Disk: {format_size(usage['total'])} (pdfs: {format_size(usage['pdfs'])})")
 
-    total_new = new_papers_count if 'new_papers_count' in dir() else len(new_papers)
+    total_new = new_papers_count
     log(f"Summary: {due} due, {total} total, {mastered} mastered, {total_new} new, {cards_generated} auto-carded")
     log("=== Daily automation complete ===\n")
 

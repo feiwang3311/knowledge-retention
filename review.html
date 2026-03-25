@@ -1157,7 +1157,7 @@ async function loadDashboard() {
   pipeline.innerHTML = stages.map(stage => `
     <div class="pipeline-stage">
       <div class="count">${p[stage] || 0}</div>
-      <div class="name">${stage}</div>
+      <div class="name">${esc(stage)}</div>
     </div>
   `).join('');
 
@@ -1184,7 +1184,7 @@ async function loadDashboard() {
     preview.innerHTML = Object.entries(byPaper).map(([pid, data]) => `
       <div class="paper-item" style="padding: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-weight: 500; font-size: 14px;">${data.title}</span>
+          <span style="font-weight: 500; font-size: 14px;">${esc(data.title)}</span>
           <span class="badge cards has-due">${data.cards.length} cards due</span>
         </div>
       </div>
@@ -1264,7 +1264,7 @@ function showCard() {
     <div class="review-progress">
       <span>Card ${s.current + 1} of ${s.cards.length}</span>
       <div style="display: flex; align-items: center; gap: 12px;">
-        <span>${card.type}</span>
+        <span>${esc(card.type)}</span>
         <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim);">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
             <span class="toggle-switch ${autoReadQuestion ? 'on' : ''}" onclick="toggleAutoRead('question', this)"></span>
@@ -1280,15 +1280,15 @@ function showCard() {
     <div class="progress-bar"><div class="fill" style="width: ${progress}%"></div></div>
 
     <div class="flashcard" style="position:relative;">
-      <div class="paper-tag">${card.paper_title}</div>
-      <div class="card-type">${card.type} &middot; difficulty ${card.difficulty || '?'}</div>
-      <div class="question">${card.question}</div>
+      <div class="paper-tag">${esc(card.paper_title)}</div>
+      <div class="card-type">${esc(card.type)} &middot; difficulty ${card.difficulty || '?'}</div>
+      <div class="question">${esc(card.question)}</div>
       <div class="audio-controls">
         <button class="audio-btn" onclick="tts.toggle(document.querySelector('.question').textContent)" title="Read question aloud">
           &#9654; Question
         </button>
       </div>
-      <div class="answer hidden" id="answer-text">${card.answer}</div>
+      <div class="answer hidden" id="answer-text">${esc(card.answer)}</div>
       <div class="audio-controls hidden" id="answer-audio">
         <button class="audio-btn" onclick="tts.toggle(document.getElementById('answer-text').textContent)" title="Read answer aloud">
           &#9654; Answer
@@ -1486,7 +1486,7 @@ function renderPapers() {
 
     el.innerHTML = Object.entries(groups).sort().map(([group, gPapers]) => `
       <h3 style="font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">
-        ${group} (${gPapers.length})
+        ${esc(group)} (${gPapers.length})
       </h3>
       ${gPapers.map(renderPaperItem).join('')}
     `).join('');
@@ -1664,7 +1664,7 @@ function renderExploration(exp) {
   return `
     <div class="exploration-thread" id="exp-${exp.id}">
       <div class="exploration-header" onclick="toggleExploration('${exp.id}')">
-        <span class="title">${exp.title}</span>
+        <span class="title">${esc(exp.title)}</span>
         <span class="meta">${qCount} Q&A · ${paperCount} papers · ${exp.created_at?.split(' ')[0] || ''}</span>
       </div>
       <div class="exploration-body" id="expbody-${exp.id}" style="display: none;">
@@ -1683,23 +1683,23 @@ function renderExploration(exp) {
 function renderQuestionNode(q) {
   return `
     <div class="exploration-qa">
-      <div class="question">${q.text}</div>
-      <div class="answer">${q.answer}</div>
+      <div class="question">${esc(q.text)}</div>
+      <div class="answer">${esc(q.answer)}</div>
 
       <div class="audio-controls" style="margin-top: 8px;">
-        <button class="audio-btn" onclick="tts.toggle('${q.answer.replace(/'/g, "\\'").replace(/\n/g, " ").substring(0, 500)}')" style="font-size: 11px;">&#9654; Listen</button>
+        <button class="audio-btn" data-tts="${esc(q.answer.substring(0, 500))}" onclick="tts.toggle(this.dataset.tts)" style="font-size: 11px;">&#9654; Listen</button>
       </div>
 
       ${(q.papers_used || []).length > 0 || (q.papers_discovered || []).length > 0 ? `
         <div class="papers-used">
           ${(q.papers_used || []).map(pid => `<span class="paper-chip" title="${pid}">${pid.substring(0, 35)}...</span>`).join('')}
-          ${(q.papers_discovered || []).map(d => `<span class="paper-chip discovered" title="Newly discovered">${d.title?.substring(0, 30) || d.id}...</span>`).join('')}
+          ${(q.papers_discovered || []).map(d => `<span class="paper-chip discovered" title="Newly discovered">${esc(d.title?.substring(0, 30) || d.id)}...</span>`).join('')}
         </div>
       ` : ''}
 
       ${(q.follow_ups || []).length > 0 ? `
         <div class="follow-up-btns">
-          ${q.follow_ups.map(fu => `<button class="follow-up-btn" onclick="askFromFollowUp(this, '${fu.replace(/'/g, "\\'")}')">${fu}</button>`).join('')}
+          ${q.follow_ups.map(fu => `<button class="follow-up-btn" data-question="${esc(fu)}" onclick="askFromFollowUp(this, this.dataset.question)">${esc(fu)}</button>`).join('')}
         </div>
       ` : ''}
 
@@ -1707,8 +1707,8 @@ function renderQuestionNode(q) {
         <div class="exploration-cards">
           ${q.cards.map(c => `
             <div class="mini-card">
-              <div class="q">Q: ${c.question}</div>
-              <div class="a">A: ${c.answer}</div>
+              <div class="q">Q: ${esc(c.question)}</div>
+              <div class="a">A: ${esc(c.answer)}</div>
             </div>
           `).join('')}
         </div>
@@ -1839,11 +1839,11 @@ function renderStudyView(el, study) {
       <button class="btn" onclick="exitStudy()" style="margin-bottom: 12px;">&larr; Back to papers</button>
 
       <div class="study-header">
-        <h2>${p.title}</h2>
-        <div class="authors">${(p.authors || []).join(', ')} · ${p.year || '?'}
+        <h2>${esc(p.title)}</h2>
+        <div class="authors">${esc((p.authors || []).join(', '))} · ${p.year || '?'}
           ${p.citation_count ? ` · ${p.citation_count} citations` : ''}</div>
         ${p.url ? `<a href="${p.url}" target="_blank" style="color: var(--accent); font-size: 13px;">Open paper &rarr;</a>` : ''}
-        <div class="abstract" style="margin-top: 12px;">${p.abstract || p.summary || 'No abstract available.'}</div>
+        <div class="abstract" style="margin-top: 12px;">${esc(p.abstract || p.summary || 'No abstract available.'}</div>
 
         <div class="audio-controls" style="margin-top: 12px;">
           <button class="audio-btn" onclick="tts.toggle(document.querySelector('.study-header .abstract').textContent)">&#9654; Listen to summary</button>
@@ -1863,10 +1863,10 @@ function renderStudyView(el, study) {
           <h3>Key Concepts (${cards.length} cards)</h3>
           ${cards.map((c, i) => `
             <div class="study-card">
-              <div class="q">${i + 1}. ${c.question}</div>
-              <div class="a">${c.answer}</div>
+              <div class="q">${i + 1}. ${esc(c.question)}</div>
+              <div class="a">${esc(c.answer)}</div>
               <div class="audio-controls" style="margin-top: 6px;">
-                <button class="audio-btn" onclick="tts.toggle('${c.question.replace(/'/g, "\\'")} ... ${c.answer.replace(/'/g, "\\'")}')" style="font-size: 11px;">&#9654; Listen</button>
+                <button class="audio-btn" data-tts="${esc(c.question + ' ... ' + c.answer)}" onclick="tts.toggle(this.dataset.tts)" style="font-size: 11px;">&#9654; Listen</button>
               </div>
             </div>
           `).join('')}
@@ -1878,8 +1878,8 @@ function renderStudyView(el, study) {
           <h3>Related Papers</h3>
           ${connections.map(c => `
             <div style="padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;">
-              <span style="font-weight: 500;">${c.title}</span>
-              <div style="color: var(--text-dim); font-size: 11px;">${(c.reasons || []).join(', ')}</div>
+              <span style="font-weight: 500;">${esc(c.title)}</span>
+              <div style="color: var(--text-dim); font-size: 11px;">${esc((c.reasons || []).join(', '))}</div>
             </div>
           `).join('')}
         </div>
@@ -1963,7 +1963,7 @@ async function onRadioSourceChange() {
                onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
           <input type="checkbox" ${radioState.selectedPaperIds.has(p.id) ? 'checked' : ''}
                  onchange="toggleRadioPaper('${p.id}', this.checked)">
-          <span>${p.title} <span style="color: var(--text-dim);">(${p.card_count ? p.card_count + ' cards' : 'summary only'}${p.studied ? '' : ' · unread'})</span></span>
+          <span>${esc(p.title)} <span style="color: var(--text-dim);">(${p.card_count ? p.card_count + ' cards' : 'summary only'}${p.studied ? '' : ' · unread'})</span></span>
         </label>
       `).join('');
   } else if (source === 'all' || source === 'unread') {
@@ -2073,9 +2073,9 @@ function renderRadio() {
   area.innerHTML = `
     <div class="radio-now-playing">
       ${segment ? `
-        <div class="segment-type">${segment.type}</div>
-        <div class="segment-label">${segment.label}</div>
-        <div class="segment-text">${segment.text}</div>
+        <div class="segment-type">${esc(segment.type)}</div>
+        <div class="segment-label">${esc(segment.label)}</div>
+        <div class="segment-text">${esc(segment.text)}</div>
       ` : `
         <div class="segment-label">Ready to play</div>
         <p style="color: var(--text-dim);">${s.papers.length} papers queued</p>
@@ -2114,7 +2114,7 @@ function renderRadio() {
             <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:0;line-height:1;" onclick="event.stopPropagation();radioMovePaper(${i},-1)" ${i === 0 ? 'disabled' : ''}>&#9650;</button>
             <button style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:0;line-height:1;" onclick="event.stopPropagation();radioMovePaper(${i},1)" ${i === s.papers.length - 1 ? 'disabled' : ''}>&#9660;</button>
           </div>
-          <span style="flex:1;cursor:pointer;" onclick="radioJumpToPaper(${i})">${paper.title}</span>
+          <span style="flex:1;cursor:pointer;" onclick="radioJumpToPaper(${i})">${esc(paper.title)}</span>
           <span style="font-size:11px;color:var(--text-dim);">${paper.segments.length} parts</span>
         </div>
       `).join('')}

@@ -314,14 +314,17 @@ class CardGenerator:
         except json.JSONDecodeError:
             pass
 
-        # Try to find array within text
-        match = re.search(r'\[[\s\S]*\]', text)
-        if match:
-            try:
-                cards = json.loads(match.group())
-                if isinstance(cards, list):
-                    return cards
-            except json.JSONDecodeError:
+        # Try to find JSON array — search from first [ to each ] from right
+        first_bracket = text.find('[')
+        if first_bracket >= 0:
+            for end in range(len(text) - 1, first_bracket, -1):
+                if text[end] == ']':
+                    try:
+                        cards = json.loads(text[first_bracket:end + 1])
+                        if isinstance(cards, list):
+                            return cards
+                    except json.JSONDecodeError:
+                        continue
                 pass
 
         return None

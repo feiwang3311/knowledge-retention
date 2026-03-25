@@ -393,6 +393,59 @@ else:
             pass
 
 
+    # Explorations
+    data, code = api_get("/api/explorations")
+    test("get explorations → 200", code == 200)
+    test("explorations has list", "explorations" in data)
+
+    data, code = api_post("/api/explorations", {"question": ""})
+    test("empty exploration question → 400", code == 400)
+
+    # Study flow
+    papers_resp2, _ = api_get("/api/papers")
+    study_papers = [p for p in papers_resp2.get("papers", []) if p.get("card_count", 0) > 0]
+    if study_papers:
+        spid = study_papers[0]["id"]
+        data, code = api_get(f"/api/study/{spid}")
+        test("study endpoint → 200", code == 200)
+        test("study has paper", "paper" in data)
+        test("study has cards", "cards" in data)
+
+    # Radio papers
+    data, code = api_get("/api/radio/papers")
+    test("radio papers → 200", code == 200)
+    test("radio papers has list", "papers" in data)
+    if data.get("papers"):
+        rp = data["papers"][0]
+        test("radio paper has studied flag", "studied" in rp)
+        test("radio paper has status", "status" in rp)
+
+        # Filtered playlist
+        rpid = data["papers"][0]["id"]
+        data2, code2 = api_get(f"/api/radio/playlist?paper_ids={rpid}")
+        test("filtered radio playlist → 200", code2 == 200)
+        test("filtered playlist has segments", len(data2.get("segments", [])) > 0)
+
+    # Paper delete (pick a low-value discovered paper)
+    del_papers = [p for p in papers_resp2.get("papers", [])
+                  if p.get("status") == "discovered" and (p.get("citation_count") or 0) == 0]
+    if del_papers:
+        del_id = del_papers[-1]["id"]
+        data, code = api_post(f"/api/papers/{del_id}/delete", {})
+        test("delete paper → 200", code == 200 and data.get("ok"))
+
+
+section("Card Generator Parse")
+
+from retention import CardGenerator
+
+# Test the improved JSON parser
+test("parse with trailing text",
+     CardGenerator._parse_response('[{"id":"a"}] some trailing text [ref]') is not None)
+test("parse nested brackets",
+     CardGenerator._parse_response('Here: [{"id":"a","tags":["x","y"]}]') is not None)
+
+
 section("Semantic Scholar Helpers")
 
 from retention import _s2_paper_to_dict
