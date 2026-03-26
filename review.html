@@ -890,6 +890,12 @@ header h1 { font-size: 20px; font-weight: 600; }
 /* Loading */
 .loading { text-align: center; padding: 32px; color: var(--text-dim); }
 
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.loading-dots { animation: pulse 1.5s infinite; }
+
 /* Filter bar */
 .filter-bar {
   display: flex;
@@ -1770,25 +1776,27 @@ async function submitExplore() {
   }
 
   // It's a question — create new exploration
+  const exploreBtn = input.nextElementSibling;
   input.disabled = true;
-  input.value = 'Thinking...';
+  if (exploreBtn) exploreBtn.disabled = true;
+  const savedQuestion = text;
+  input.value = 'Searching papers and generating answer... (30-60s)';
 
   const result = await api('/api/explorations', {
     method: 'POST',
-    body: JSON.stringify({ question: text }),
+    body: JSON.stringify({ question: savedQuestion }),
   });
 
   input.disabled = false;
+  if (exploreBtn) exploreBtn.disabled = false;
   input.value = '';
 
   if (result.ok) {
     toast('Exploration created');
-    loadExplore();
+    await loadExplore();
     // Auto-expand the new exploration
-    setTimeout(() => {
-      const body = document.getElementById(`expbody-${result.exploration.id}`);
-      if (body) body.style.display = '';
-    }, 100);
+    const body = document.getElementById(`expbody-${result.exploration.id}`);
+    if (body) body.style.display = '';
   } else {
     toast(result.error || 'Failed', 'error');
   }
@@ -1799,25 +1807,27 @@ async function askFollowUp(expId) {
   const question = input.value.trim();
   if (!question) return;
 
-  input.disabled = true;
-  input.value = 'Thinking...';
+  // Show loading state with animated indicator
+  const askBox = input.parentElement;
+  const originalHTML = askBox.innerHTML;
+  askBox.innerHTML = `<div style="flex:1;padding:10px;color:var(--accent);font-size:13px;">
+    Searching papers and generating answer... (this may take 30-60s)
+    <span class="loading-dots">...</span>
+  </div>`;
 
   const result = await api('/api/explorations/ask', {
     method: 'POST',
     body: JSON.stringify({ exploration_id: expId, question }),
   });
 
-  input.disabled = false;
-  input.value = '';
-
   if (result.ok) {
-    loadExplore();
-    setTimeout(() => {
-      const body = document.getElementById(`expbody-${expId}`);
-      if (body) body.style.display = '';
-    }, 100);
+    // Reload and re-expand this exploration
+    await loadExplore();
+    const body = document.getElementById(`expbody-${expId}`);
+    if (body) body.style.display = '';
   } else {
     toast(result.error || 'Failed', 'error');
+    askBox.innerHTML = originalHTML;
   }
 }
 
