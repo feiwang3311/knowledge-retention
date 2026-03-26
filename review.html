@@ -1629,12 +1629,28 @@ function renderExploreContent() {
     html += '<div class="empty-state" style="padding: 24px;">Ask a question to start exploring. Try: "How is LLaMA different from DeepSeek and Qwen?"</div>';
   }
 
-  // Library section (replaces Papers tab)
+  // High-priority papers section (always visible)
+  if (papersData) {
+    const important = papersData.papers
+      .filter(p => p.priority === 'important' && !['read', 'reviewing', 'mastered'].includes(p.status))
+      .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0));
+
+    if (important.length > 0) {
+      html += `
+        <h3 style="font-size: 14px; color: var(--orange); text-transform: uppercase; letter-spacing: 0.5px; margin: 20px 0 10px;">
+          High Priority (${important.length} papers)
+        </h3>
+      `;
+      html += important.map(renderPaperItem).join('');
+    }
+  }
+
+  // Library section (collapsed)
   const totalPapers = papersData ? papersData.papers.length : '...';
   html += `
     <div class="uncategorized-section">
       <div class="uncategorized-header" onclick="toggleLibrary()">
-        Library (${totalPapers} papers) ▾
+        All Papers (${totalPapers}) ▾
       </div>
       <div id="library-section" style="display: none;">
         <div class="filter-bar">
