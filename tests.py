@@ -347,11 +347,14 @@ else:
     papers_data, _ = api_get("/api/papers")
     if papers_data.get("papers"):
         pid = papers_data["papers"][0]["id"]
+        original_status = papers_data["papers"][0].get("status", "discovered")
         data, code = api_post(f"/api/papers/{pid}/status", {"status": "BOGUS"})
         test("invalid status → 400", code == 400)
 
         data, code = api_post(f"/api/papers/{pid}/status", {"status": "unread"})
         test("valid status update → 200", code == 200 and data.get("ok"))
+        # Cleanup: restore original status
+        api_post(f"/api/papers/{pid}/status", {"status": original_status})
 
     # TTS
     data, code = api_post("/api/tts", {"text": ""})
@@ -370,12 +373,26 @@ else:
     data, code = api_post("/api/topics", {"description": ""})
     test("empty topic → 400", code == 400)
 
-    # Feedback
-    data, code = api_post("/api/feedback", {"paper_id": "test-id", "vote": "good"})
+    # Feedback (use a clearly fake ID that won't affect real data)
+    data, code = api_post("/api/feedback", {"paper_id": "__test_paper__", "vote": "good"})
     test("save feedback → 200", code == 200 and data.get("ok"))
 
     data, code = api_post("/api/feedback", {})
     test("feedback no paper_id → 400", code == 400)
+
+    # Cleanup: remove test feedback entry
+    try:
+        fb_path = Path(__file__).parent / "feedback.json"
+        if fb_path.exists():
+            import json as _json
+            with open(fb_path) as f:
+                fb = _json.load(f)
+            fb.get("votes", {}).pop("__test_paper__", None)
+            fb.get("priorities", {}).pop("__test_paper__", None)
+            with open(fb_path, 'w') as f:
+                _json.dump(fb, f, indent=2)
+    except Exception:
+        pass
 
     # Radio playlist
     data, code = api_get("/api/radio/playlist")
@@ -438,13 +455,9 @@ else:
         test("filtered radio playlist → 200", code2 == 200)
         test("filtered playlist has segments", len(data2.get("segments", [])) > 0)
 
-    # Paper delete (pick a low-value discovered paper)
-    del_papers = [p for p in papers_resp2.get("papers", [])
-                  if p.get("status") == "discovered" and (p.get("citation_count") or 0) == 0]
-    if del_papers:
-        del_id = del_papers[-1]["id"]
-        data, code = api_post(f"/api/papers/{del_id}/delete", {})
-        test("delete paper → 200", code == 200 and data.get("ok"))
+    # Paper delete — test with nonexistent paper (don't destroy real data)
+    data, code = api_post("/api/papers/__test_nonexistent__/delete", {})
+    test("delete nonexistent → 404", code == 404)
 
 
     # Study complete + verify radio includes it + cleanup
@@ -452,6 +465,13 @@ else:
                         if p.get("card_count", 0) > 0 and p.get("status") != "read"]
     if unstudied_papers:
         study_pid = unstudied_papers[0]["id"]
+
+        # Snapshot cards before study_complete
+        import json as _json
+        state_path = Path(__file__).parent / "review_state.json"
+        with open(state_path) as f:
+            cards_before = set(_json.load(f).get("cards", {}).keys())
+
         data, code = api_post(f"/api/study/{study_pid}/complete", {})
         test("study complete → 200", code == 200 and data.get("ok"))
 
@@ -461,8 +481,19 @@ else:
         paper_in_radio = any(unstudied_papers[0]["title"][:20] in label for label in radio_labels)
         test("studied paper appears in radio", paper_in_radio)
 
-        # Cleanup: revert paper status so tests don't pollute data
+        # Cleanup: revert paper status
         api_post(f"/api/papers/{study_pid}/status", {"status": unstudied_papers[0].get("status", "discovered")})
+        # Remove only the NEW cards that study_complete added
+        try:
+            with open(state_path) as f:
+                rs = _json.load(f)
+            new_cards = set(rs.get("cards", {}).keys()) - cards_before
+            for cid in new_cards:
+                del rs["cards"][cid]
+            with open(state_path, 'w') as f:
+                _json.dump(rs, f, indent=2)
+        except Exception:
+            pass
 
     # Review answer with non-integer quality
     data, code = api_post("/api/review/answer", {"card_id": "test", "quality": "bad"})
