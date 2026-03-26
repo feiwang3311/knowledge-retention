@@ -447,7 +447,7 @@ else:
         test("delete paper → 200", code == 200 and data.get("ok"))
 
 
-    # Study complete + verify radio includes it
+    # Study complete + verify radio includes it + cleanup
     unstudied_papers = [p for p in papers_resp2.get("papers", [])
                         if p.get("card_count", 0) > 0 and p.get("status") != "read"]
     if unstudied_papers:
@@ -460,6 +460,9 @@ else:
         radio_labels = [s["label"] for s in radio_data.get("segments", []) if s["type"] == "summary"]
         paper_in_radio = any(unstudied_papers[0]["title"][:20] in label for label in radio_labels)
         test("studied paper appears in radio", paper_in_radio)
+
+        # Cleanup: revert paper status so tests don't pollute data
+        api_post(f"/api/papers/{study_pid}/status", {"status": unstudied_papers[0].get("status", "discovered")})
 
     # Review answer with non-integer quality
     data, code = api_post("/api/review/answer", {"card_id": "test", "quality": "bad"})
